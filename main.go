@@ -79,8 +79,21 @@ func main(){
 }
 
 
+//todo: consider adding an automated method to handle possible long term errors down the road
+// example: if the (@n) index gets too large, the bit size may need to increase (unless the data being added is too large to be normal)
+// example: if the pos in the file starts to get close to the integer limit, a new file (i.e. test.1.db) may need to extend the existing file to hold more data
+//  this senerio may also require the first file to be moved to an index (i.e. test.0.db), and placed inside a folder with the original name (i.e. test.db - folder)
+// example: handle potential power outage recovery. keep a queue of database operations inside a file (using the core database functions for simplicity, but in a different format)
+
+//todo: add an optional `AdvancedDatabase` struct that allows users to utilize the core methods and build their own database structure
+// users should also be able to choose the default bit size, and what data object prefixes to use (which will need to be escaped)
+// the core prefixes should also be escaped, and should warn users that they exist, incase they try to add one of them into their prefix list
+// core prefixes: [%=,@-!], and debug char [\n]
+// default database prefixes: [$:] (note: do not allow users to use whitespace characters as prefixes)
+
+
 //todo: add compression and (optional) encryption to core database methods
-// also ensure valyes do not include special chars from database syntax (%$:=,@-!)
+// also ensure valyes do not include special chars from database syntax [%$:=,@-!]
 
 func (db *Database) addDataObj(prefix byte, key []byte, val []byte) (dbObj, error) {
 	pos, _ := db.file.Seek(0, io.SeekStart)
