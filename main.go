@@ -73,7 +73,9 @@ func main(){
 	db.getDataObj('$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte{0})
 
 	db.file.Seek(0, io.SeekStart)
-	db.setDataObj('$', []byte("MyTable"), []byte("MyVal"))
+	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal"))
+	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger"))
+	db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger_MoreTextToMakeThisLonger"))
 }
 
 
@@ -225,12 +227,6 @@ func (db *Database) getDataObj(prefix byte, key []byte, val []byte, stopAfterFir
 			regTypeVal = 2
 		}else if len(val) != 0 {
 			regTypeVal = 3
-			fmt.Println(string(regex.Comp(`(\\*)([\\\%])`).RepFunc(val, func(data func(int) []byte) []byte {
-				if l := len(data(1)); (l == 0 || l % 2 == 0) && data(2)[0] != '\\' {
-					return regex.JoinBytes(data(1), '\\', data(2))
-				}
-				return data(0)
-			})))
 			reVal, err = regex.CompTry(string(regex.Comp(`(\\*)([\\\%])`).RepFunc(val, func(data func(int) []byte) []byte {
 				if l := len(data(1)); (l == 0 || l % 2 == 0) && data(2)[0] != '\\' {
 					return regex.JoinBytes(data(1), '\\', data(2))
@@ -404,14 +400,218 @@ func (db *Database) rmDataObj(prefix byte) (dbObj, error) {
 
 //todo: add method to set data over existing object
 func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, error) {
+	pos, _ := db.file.Seek(0, io.SeekCurrent)
+
+	if off := pos % int64(dataObjSize); off != 0 {
+		db.file.Write(bytes.Repeat([]byte{'-'}, int(off)))
+		pos += off
+	}
+
+	buf := make([]byte, 1)
+	_, err := db.file.Read(buf)
+
+	for err == nil && buf[0] != prefix {
+		pos, _ = db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+		_, err = db.file.Read(buf)
+	}
+
+	if err != nil {
+		return dbObj{}, nil
+	}
+
+
+	// set data on object
+	addNew := false
+	_ = addNew
+
+	obj := dbObj{
+		key: key,
+		val: val,
+		line: pos / int64(dataObjSize),
+	}
+
+	val = regex.JoinBytes(key, '=', val)
+
+	// set data
+	off := 1
+	if debugMode {
+		off++
+	}
+
+	buf = make([]byte, int64(dataObjSize)-1)
+	_, err = db.file.Read(buf)
+	oldPos, _ := db.file.Seek(int64(dataObjSize) * -1, io.SeekCurrent)
+
+	buf = bytes.TrimRight(buf, "-\n")
+	reInd := regex.Comp(`[\-\n]*@([a-z0-9]+)$`)
+	for err == nil && reInd.Match(buf) {
+		buf = reInd.RepFunc(buf, func(data func(int) []byte) []byte {
+			if getPos, err := strconv.ParseInt(string(data(1)), 36, 64); err == nil {
+				newPos, err := db.file.Seek(getPos*int64(dataObjSize), io.SeekStart)
+				b := make([]byte, int64(dataObjSize))
+				_, err = db.file.Read(b)
+				if err == nil && b[0] == '&' {
+					if len(val) == 0 {
+						db.file.Seek(oldPos, io.SeekStart)
+						db.file.Write([]byte{'!'})
+						if debugMode {
+							db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-2))
+							db.file.Write([]byte{'\n'})
+						}else{
+							db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-1))
+						}
+					}else{
+						db.file.Seek(oldPos+1, io.SeekStart)
+
+						if len(val) + off > int(dataObjSize) {
+							posStr := []byte(strconv.FormatInt(newPos / int64(dataObjSize), 36))
+
+							posStr = append([]byte{'@'}, posStr...)
+							offset := int(dataObjSize) - len(posStr) - 1
+
+							if debugMode {
+								offset--
+							}
+
+							db.file.Write(val[:offset])
+							db.file.Write(posStr)
+							val = val[offset:]
+
+							if debugMode {
+								db.file.Write([]byte{'\n'})
+							}
+						}else{
+							db.file.Write(val)
+							if len(val) < int(dataObjSize) {
+								if debugMode {
+									db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 2))
+									db.file.Write([]byte{'\n'})
+								}else{
+									db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 1))
+								}
+							}
+							val = []byte{}
+						}
+					}
+
+					oldPos, _ = db.file.Seek(newPos, io.SeekStart)
+
+					return bytes.TrimRight(b[1:], "-\n")
+				}
+			}
+			return []byte{}
+		})
+	}
+
+
+	// add buf to old data
+	oldData := bytes.SplitN(buf, []byte{'='}, 2)
+	for len(oldData) < 2 {
+		oldData = append(oldData, []byte{})
+	}
+	obj.oldKey = oldData[0]
+	obj.oldVal = oldData[1]
+
+
+	// finish adding new value
+	buf = make([]byte, int64(dataObjSize))
+	_, err = db.file.Read(buf)
+	if err == nil && buf[0] == '&' {
+		if len(val) == 0 {
+			db.file.Seek(oldPos, io.SeekStart)
+			db.file.Write([]byte{'!'})
+			if debugMode {
+				db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-2))
+				db.file.Write([]byte{'\n'})
+			}else{
+				db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-1))
+			}
+		}else{
+			db.file.Seek(oldPos+1, io.SeekStart)
+			posLine := oldPos / int64(dataObjSize)
+			_ = posLine
+
+			if len(val) + off > int(dataObjSize) {
+				var posStr []byte
+				var useNewPos int64 = -1
+
+				curPos, _ := db.file.Seek(0, io.SeekCurrent)
+				// db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+				db.file.Seek(0, io.SeekStart)
+				_ = curPos
+
+				buf = make([]byte, 1)
+				_, err = db.file.Read(buf)
+				for err == nil && buf[0] != '!' {
+					db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+					_, err = db.file.Read(buf)
+				}
+
+				if err == io.EOF {
+					newPos, _ := db.file.Seek(0, io.SeekEnd)
+					useNewPos = newPos
+					newPos /= int64(dataObjSize)
+					posStr = []byte(strconv.FormatInt(newPos, 36))
+					posLine = newPos
+				}else{
+					newPos, _ := db.file.Seek(-1, io.SeekCurrent)
+					useNewPos = newPos
+					newPos /= int64(dataObjSize)
+					posStr = []byte(strconv.FormatInt(newPos, 36))
+				}
+	
+				db.file.Seek(curPos, io.SeekStart)
+
+				posStr = append([]byte{'@'}, posStr...)
+				offset := int(dataObjSize) - len(posStr) - 1
+
+				if debugMode {
+					offset--
+				}
+
+				db.file.Write(val[:offset])
+				db.file.Write(posStr)
+				val = val[offset:]
+
+				if debugMode {
+					db.file.Write([]byte{'\n'})
+				}
+
+				if useNewPos != -1 {
+					db.file.Seek(useNewPos, io.SeekStart)
+				}
+
+				db.file.Write([]byte{'&'})
+
+				for len(val) + off > int(dataObjSize) {
+					//todo: finish adding value
+					// use the addDataObj method as a reference
+					// this method will mainly just run the bulk of that method at this step in the process
+
+					break
+				}
+			}else{
+				db.file.Write(val)
+				if len(val) < int(dataObjSize) {
+					if debugMode {
+						db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 2))
+						db.file.Write([]byte{'\n'})
+					}else{
+						db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 1))
+					}
+				}
+			}
+		}
+	}
+
 
 	//todo: replace this less preformant method with a better one
 	// note: this method needs to use the same starting point for the data object being changed,
 	// to avoid the need to update table values, and to better optimize the database performance
-	db.rmDataObj(prefix)
-	db.addDataObj(prefix, key, val)
+	// db.rmDataObj(prefix)
+	// db.addDataObj(prefix, key, val)
 
-	return dbObj{}, nil
+	return obj, nil
 }
 
 
