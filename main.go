@@ -76,6 +76,7 @@ func main(){
 	db.setDataObj('$', []byte("MyTable"), []byte("MyVal"))
 }
 
+
 //todo: add compression and (optional) encryption to core database methods
 // also ensure valyes do not include special chars from database syntax (%$:=,@-!)
 
@@ -412,6 +413,7 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 
 	return dbObj{}, nil
 }
+
 
 //todo: include a sync.Mutex for public database methods to prevent them from running at the same time
 
