@@ -58,15 +58,17 @@ func main(){
 		db.file.Truncate(0)
 	}
 
-	/* db.AddTable("MyTable")
+	db.AddTable("MyTable")
+	table2, err := db.AddTable("MyTable2")
 	table, err := db.GetTable("MyTable")
 	table.AddRow("Row1", "val1")
 	table.AddRow("Row2", "val2")
-	table.GetRow("Row1") */
-	// db.RemoveTable("MyTable")
+	table.GetRow("Row1")
+	table2.Del()
+	// db.DelTable("MyTable2")
 
 	//todo: use this to test the setDataObj method
-	db.addDataObj('$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte("test"))
+	/* db.addDataObj('$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte("test"))
 
 	db.file.Seek(0, io.SeekStart)
 	db.getDataObj('$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte{0})
@@ -74,7 +76,7 @@ func main(){
 	db.file.Seek(0, io.SeekStart)
 	db.setDataObj('$', []byte("MyTable"), []byte("MyVal"))
 	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger"))
-	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger_MoreTextToMakeThisLonger"))
+	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger_MoreTextToMakeThisLonger")) */
 
 	db.Optimize()
 }
@@ -85,7 +87,7 @@ func New(path string, bitSize uint16) (*Database, error) {
 		return &Database{}, err
 	}
 
-	file, err := os.OpenFile("test.db", os.O_CREATE|os.O_RDWR, 0755)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0755)
 	if err != nil {
 		return &Database{}, err
 	}
@@ -564,7 +566,7 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 	// finish adding new value
 	buf = make([]byte, int64(db.bitSize))
 	_, err = db.file.Read(buf)
-	if err == nil && buf[0] == '&' {
+	if err == nil /* && buf[0] == '&' */ {
 		if len(val) == 0 {
 			db.file.Seek(oldPos, io.SeekStart)
 			db.file.Write([]byte{'!'})
@@ -716,6 +718,64 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 
 //todo: include a sync.Mutex for public database methods to prevent them from running at the same time
 
+// Optimize will optimize a database file by cloning the tables and their rows to a new file
+//
+// this method will remove any orphaned data (rows without a table, etc),
+// and will move existing tables to the top of the database file for quicker access
+//
+// row indexes are referenced from the tables, so having tables at the top is best for performance
+func (db *Database) Optimize() (*Database, error) {
+	db.file.Sync()
+	
+	file, err := os.OpenFile(db.path+".opt", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0755)
+	if err != nil {
+		return db, err
+	}
+	defer file.Close()
+
+	newDB := &Database{
+		file: file,
+		path: db.path+".opt",
+		bitSize: db.bitSize,
+	}
+
+	tableList, err := db.FindTables([]byte{0})
+	if err != nil {
+		return db, nil
+	}
+
+	newTables := make([]*Table, len(tableList))
+	for i, table := range tableList {
+		if tb, err := newDB.AddTable(table.Name); err == nil {
+			newTables[i] = tb
+		}
+	}
+
+	for i, table := range tableList {
+		if tb := newTables[i]; tb != nil {
+			if rowList, err := table.FindRows([]byte{0}, []byte{0}); err == nil {
+				for _, row := range rowList {
+					tb.AddRow(row.Key, row.Value)
+				}
+			}
+		}
+	}
+
+	file.Sync()
+	file.Close()
+	db.file.Close()
+	os.Remove(db.path)
+	os.Rename(db.path+".opt", db.path)
+
+	file, err = os.OpenFile(db.path, os.O_CREATE|os.O_RDWR, 0755)
+	db.file = file
+	if err != nil {
+		return db, err
+	}
+
+	return db, nil
+}
+
 // AddTable adds a new table to the database
 // this method returns the new table
 func (db *Database) AddTable(name string) (*Table, error) {
@@ -735,7 +795,7 @@ func (db *Database) AddTable(name string) (*Table, error) {
 		db: db,
 		Name: string(table.key),
 		key: table.key,
-		val: []byte{},
+		val: table.val,
 		line: table.line,
 	}
 
@@ -763,7 +823,7 @@ func (db *Database) GetTable(name string) (*Table, error) {
 		db: db,
 		Name: string(table.key),
 		key: table.key,
-		val: []byte{},
+		val: table.val,
 		line: table.line,
 	}
 
@@ -782,13 +842,13 @@ func (db *Database) GetTable(name string) (*Table, error) {
 //
 // if you are dealing with user input, it is recommended to sanitize it and remove the first byte of 0,
 // to ensure the input cannot run regex, and will be treated as a literal string
-func (db *Database) FineTables(name []byte) ([]*Table, error) {
+func (db *Database) FindTables(name []byte) ([]*Table, error) {
 	resTables := []*Table{}
 
 	db.file.Seek(0, io.SeekStart)
 	for {
 		table, err := db.getDataObj('$', name, []byte{0})
-		if err == nil {
+		if err != nil {
 			break
 		}
 
@@ -796,7 +856,7 @@ func (db *Database) FineTables(name []byte) ([]*Table, error) {
 			db: db,
 			Name: string(table.key),
 			key: table.key,
-			val: []byte{},
+			val: table.val,
 			line: table.line,
 		}
 	
@@ -812,51 +872,26 @@ func (db *Database) FineTables(name []byte) ([]*Table, error) {
 	return resTables, nil
 }
 
-// DelTable removes a table from the database
-//
-// this method returns the old table
-func (db *Database) DelTable(name string) (*Table, error) {
-	keyB := goutil.Clean.Bytes([]byte(name))
-	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
-		return r == 0
-	})
-
-	//todo: get table from cache
-
-	db.file.Seek(0, io.SeekStart)
-	table, err := db.getDataObj('$', keyB, []byte{0})
-	if err != nil {
-		return &Table{db: db}, err
-	}
-
-	db.file.Seek(table.line * int64(db.bitSize), io.SeekStart)
-	db.rmDataObj('$')
+// Del removes the table from the database
+func (table *Table) Del() error {
+	table.db.file.Seek(table.line * int64(table.db.bitSize), io.SeekStart)
+	_, err := table.db.rmDataObj('$')
 
 	rowList := bytes.Split(table.val, []byte{','})
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
-			db.file.Seek(line * int64(db.bitSize), io.SeekStart)
-			db.rmDataObj(':')
+			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
+			table.db.rmDataObj(':')
 		}
 	}
 
-	//todo: remove table from cache
+	table.line = -1
 
-	return &Table{
-		db: db,
-		Name: string(table.key),
-		line: -1,
-	}, nil
-}
-
-func (db *Database) Optimize() (*Database, error) {
-	return db, nil
+	return err
 }
 
 // Rename changes the name of the table
-//
-// this method returns the updated table
-func (table *Table) Rename(name string) (*Table, error) {
+func (table *Table) Rename(name string) error {
 	keyB := goutil.Clean.Bytes([]byte(name))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
@@ -865,7 +900,7 @@ func (table *Table) Rename(name string) (*Table, error) {
 	table.db.file.Seek(table.line * int64(table.db.bitSize), io.SeekStart)
 	tb, err := table.db.setDataObj('$', keyB, table.val)
 	if err != nil {
-		return table, err
+		return err
 	}
 
 	table.Name = string(tb.key)
@@ -874,7 +909,7 @@ func (table *Table) Rename(name string) (*Table, error) {
 
 	//todo: add table to cache
 
-	return table, nil
+	return nil
 }
 
 // AddRow adds a new key value pair to the table
@@ -988,44 +1023,18 @@ func (table *Table) FindRows(key []byte, value []byte) ([]*Row, error) {
 	return resRow, nil
 }
 
-// DelRow removes a key value pair from the table
-//
-// this method returns the old row
-func (table *Table) DelRow(key string) (*Row, error) {
-	keyB := goutil.Clean.Bytes([]byte(key))
-	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
-		return r == 0
-	})
+// DelRow removes the key value pair from the table
+func (row *Row) Del() error {
+	row.table.db.file.Seek(row.line * int64(row.table.db.bitSize), io.SeekStart)
+	_, err := row.table.db.rmDataObj(':')
+	
+	row.line = -1
 
-	//todo: get row from cache
-
-	rowList := bytes.Split(table.val, []byte{','})
-	for _, rowLine := range rowList {
-		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
-			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
-			if row, err := table.db.getDataObj(':', keyB, []byte{0}, true); err == nil {
-				table.db.file.Seek(row.line * int64(table.db.bitSize), io.SeekStart)
-				table.db.rmDataObj(':')
-
-				//todo: remove row from table cache
-
-				return &Row{
-					table: table,
-					Key: string(row.key),
-					Value: string(row.val),
-					line: -1,
-				}, nil
-			}
-		}
-	}
-
-	return &Row{table: table}, io.EOF
+	return err
 }
 
 // Rename changes the key of the row
-//
-// this method returns the updated row
-func (row *Row) Rename(key string) (*Row, error) {
+func (row *Row) Rename(key string) error {
 	keyB := goutil.Clean.Bytes([]byte(key))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
@@ -1039,7 +1048,7 @@ func (row *Row) Rename(key string) (*Row, error) {
 	row.table.db.file.Seek(row.line * int64(row.table.db.bitSize), io.SeekStart)
 	rw, err := row.table.db.setDataObj('$', keyB, valB)
 	if err != nil {
-		return row, err
+		return err
 	}
 
 	row.Key = string(rw.key)
@@ -1047,13 +1056,11 @@ func (row *Row) Rename(key string) (*Row, error) {
 
 	//todo: add row to table cache
 
-	return row, nil
+	return nil
 }
 
 // SetValue changes the value of the row
-//
-// this method returns the updated row
-func (row *Row) SetValue(value string) (*Row, error) {
+func (row *Row) SetValue(value string) error {
 	keyB := goutil.Clean.Bytes([]byte(row.Key))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
@@ -1067,7 +1074,7 @@ func (row *Row) SetValue(value string) (*Row, error) {
 	row.table.db.file.Seek(row.line * int64(row.table.db.bitSize), io.SeekStart)
 	rw, err := row.table.db.setDataObj('$', keyB, valB)
 	if err != nil {
-		return row, err
+		return err
 	}
 
 	row.Key = string(rw.key)
@@ -1075,5 +1082,5 @@ func (row *Row) SetValue(value string) (*Row, error) {
 
 	//todo: add row to table cache
 
-	return row, nil
+	return nil
 }
