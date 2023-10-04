@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/AspieSoft/go-regex-re2/v2"
 	"github.com/AspieSoft/goutil/v7"
 )
 
-const debugMode = true
+const DebugMode = true
 
 type Database struct {
 	file *os.File
+	path string
+	bitSize uint16
 }
 
 type Table struct {
@@ -41,20 +44,16 @@ type dbObj struct {
 	oldVal []byte
 }
 
-const dataObjSize uint16 = 16
+
+const maxDatabaseSize uint64 = 99999999999999 // 14 (64000 bit - max lines = 1 billion)
 
 func main(){
-	file, err := os.OpenFile("test.db", os.O_CREATE|os.O_RDWR, 0755)
+	db, err := New("test.db", 16)
 	if err != nil {
 		panic(err)
 	}
-	defer file.Close()
 
-	db := Database{
-		file: file,
-	}
-
-	if debugMode {
+	if DebugMode {
 		_ = fmt.Print
 		db.file.Truncate(0)
 	}
@@ -73,9 +72,49 @@ func main(){
 	db.getDataObj('$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte{0})
 
 	db.file.Seek(0, io.SeekStart)
-	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal"))
+	db.setDataObj('$', []byte("MyTable"), []byte("MyVal"))
 	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger"))
-	db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger_MoreTextToMakeThisLonger"))
+	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger_MoreTextToMakeThisLonger"))
+
+	db.Optimize()
+}
+
+func New(path string, bitSize uint16) (*Database, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return &Database{}, err
+	}
+
+	file, err := os.OpenFile("test.db", os.O_CREATE|os.O_RDWR, 0755)
+	if err != nil {
+		return &Database{}, err
+	}
+
+	if bitSize == 0 {
+		bitSize = 1024
+	}else if DebugMode && bitSize < 16 {
+		bitSize = 16
+	}else if !DebugMode && bitSize < 64 {
+		bitSize = 64
+	}else if bitSize > 64000 {
+		bitSize = 64000
+	}
+
+	return &Database{
+		file: file,
+		path: path,
+		bitSize: bitSize,
+	}, nil
+}
+
+func (db *Database) Close() error {
+	err1 := db.file.Sync()
+	err2 := db.file.Close()
+
+	if err2 == nil {
+		return err1
+	}
+	return err2
 }
 
 
@@ -98,7 +137,7 @@ func main(){
 func (db *Database) addDataObj(prefix byte, key []byte, val []byte) (dbObj, error) {
 	pos, _ := db.file.Seek(0, io.SeekStart)
 
-	if off := pos % int64(dataObjSize); off != 0 {
+	if off := pos % int64(db.bitSize); off != 0 {
 		db.file.Write(bytes.Repeat([]byte{'-'}, int(off)))
 		pos += off
 	}
@@ -106,7 +145,7 @@ func (db *Database) addDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 	buf := make([]byte, 1)
 	_, err := db.file.Read(buf)
 	for err == nil && buf[0] != '!' {
-		pos, _ = db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+		pos, _ = db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
 		_, err = db.file.Read(buf)
 	}
 
@@ -121,32 +160,32 @@ func (db *Database) addDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 	obj := dbObj{
 		key: key,
 		val: val,
-		line: pos / int64(dataObjSize),
+		line: pos / int64(db.bitSize),
 	}
 
 	val = regex.JoinBytes(key, '=', val)
 
-	posLine := pos / int64(dataObjSize)
+	posLine := pos / int64(db.bitSize)
 
 	// add data
 	db.file.Write([]byte{prefix})
 
 	off := 1
-	if debugMode {
+	if DebugMode {
 		off++
 	}
 
-	for len(val) + off > int(dataObjSize) {
+	for len(val) + off > int(db.bitSize) {
 		var posStr []byte
 		var useNewPos int64 = -1
 
 		if !addNew {
 			curPos, _ := db.file.Seek(0, io.SeekCurrent)
-			db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+			db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
 
 			_, err = db.file.Read(buf)
 			for err == nil && buf[0] != '!' {
-				db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+				db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
 				_, err = db.file.Read(buf)
 			}
 
@@ -154,13 +193,13 @@ func (db *Database) addDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 				addNew = true
 				newPos, _ := db.file.Seek(0, io.SeekEnd)
 				useNewPos = newPos
-				newPos /= int64(dataObjSize)
+				newPos /= int64(db.bitSize)
 				posStr = []byte(strconv.FormatInt(newPos, 36))
 				posLine = newPos
 			}else{
 				newPos, _ := db.file.Seek(-1, io.SeekCurrent)
 				useNewPos = newPos
-				newPos /= int64(dataObjSize)
+				newPos /= int64(db.bitSize)
 				posStr = []byte(strconv.FormatInt(newPos, 36))
 			}
 
@@ -171,9 +210,9 @@ func (db *Database) addDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 		}
 
 		posStr = append([]byte{'@'}, posStr...)
-		offset := int(dataObjSize) - len(posStr) - 1
+		offset := int(db.bitSize) - len(posStr) - 1
 
-		if debugMode {
+		if DebugMode {
 			offset--
 		}
 
@@ -181,7 +220,7 @@ func (db *Database) addDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 		db.file.Write(posStr)
 		val = val[offset:]
 
-		if debugMode {
+		if DebugMode {
 			db.file.Write([]byte{'\n'})
 		}
 
@@ -193,12 +232,12 @@ func (db *Database) addDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 	}
 
 	db.file.Write(val)
-	if len(val) < int(dataObjSize) {
-		if debugMode {
-			db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 2))
+	if len(val) < int(db.bitSize) {
+		if DebugMode {
+			db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize) - len(val) - 2))
 			db.file.Write([]byte{'\n'})
 		}else{
-			db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 1))
+			db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize) - len(val) - 1))
 		}
 	}
 
@@ -259,7 +298,7 @@ func (db *Database) getDataObj(prefix byte, key []byte, val []byte, stopAfterFir
 	
 	pos, _ := db.file.Seek(0, io.SeekCurrent)
 
-	if off := pos % int64(dataObjSize); off != 0 {
+	if off := pos % int64(db.bitSize); off != 0 {
 		db.file.Write(bytes.Repeat([]byte{'-'}, int(off)))
 		pos += off
 	}
@@ -269,7 +308,7 @@ func (db *Database) getDataObj(prefix byte, key []byte, val []byte, stopAfterFir
 
 	for err == nil /* && buf[0] != prefix */ {
 		if buf[0] == prefix {
-			buf = make([]byte, int64(dataObjSize)-1)
+			buf = make([]byte, int64(db.bitSize)-1)
 			_, err = db.file.Read(buf)
 
 			buf = bytes.TrimRight(buf, "-\n")
@@ -277,8 +316,8 @@ func (db *Database) getDataObj(prefix byte, key []byte, val []byte, stopAfterFir
 			for reInd.Match(buf) {
 				buf = reInd.RepFunc(buf, func(data func(int) []byte) []byte {
 					if getPos, err := strconv.ParseInt(string(data(1)), 36, 64); err == nil {
-						db.file.Seek(getPos*int64(dataObjSize), io.SeekStart)
-						b := make([]byte, int64(dataObjSize))
+						db.file.Seek(getPos*int64(db.bitSize), io.SeekStart)
+						b := make([]byte, int64(db.bitSize))
 						_, err = db.file.Read(b)
 						if err == nil && b[0] == '&' {
 							return bytes.TrimRight(b[1:], "-\n")
@@ -290,7 +329,7 @@ func (db *Database) getDataObj(prefix byte, key []byte, val []byte, stopAfterFir
 
 			data := bytes.SplitN(buf, []byte{'='}, 2)
 			if len(data) == 0 {
-				db.file.Seek(pos + int64(dataObjSize), io.SeekStart)
+				db.file.Seek(pos + int64(db.bitSize), io.SeekStart)
 				buf = make([]byte, 1)
 				_, err = db.file.Read(buf)
 
@@ -309,12 +348,12 @@ func (db *Database) getDataObj(prefix byte, key []byte, val []byte, stopAfterFir
 			(regTypeKey == 3 && reKey.Match(data[0])) {
 				if (regTypeVal == 0 && bytes.Equal(val, data[1])) || regTypeVal == 1 || regTypeVal == 2 ||
 				(regTypeVal == 3 && reVal.Match(data[1])) {
-					db.file.Seek(pos + int64(dataObjSize), io.SeekStart)
+					db.file.Seek(pos + int64(db.bitSize), io.SeekStart)
 
 					return dbObj{
 						key: data[0],
 						val: data[1],
-						line: pos / int64(dataObjSize),
+						line: pos / int64(db.bitSize),
 					}, nil
 				}
 			}
@@ -323,13 +362,13 @@ func (db *Database) getDataObj(prefix byte, key []byte, val []byte, stopAfterFir
 				return dbObj{}, io.EOF
 			}
 
-			db.file.Seek(pos + int64(dataObjSize), io.SeekStart)
+			db.file.Seek(pos + int64(db.bitSize), io.SeekStart)
 			buf = make([]byte, 1)
 			_, err = db.file.Read(buf)
 			continue
 		}
 
-		pos, _ = db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+		pos, _ = db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
 		_, err = db.file.Read(buf)
 	}
 
@@ -343,7 +382,7 @@ func (db *Database) getDataObj(prefix byte, key []byte, val []byte, stopAfterFir
 func (db *Database) rmDataObj(prefix byte) (dbObj, error) {
 	pos, _ := db.file.Seek(0, io.SeekCurrent)
 
-	if off := pos % int64(dataObjSize); off != 0 {
+	if off := pos % int64(db.bitSize); off != 0 {
 		db.file.Write(bytes.Repeat([]byte{'-'}, int(off)))
 		pos += off
 	}
@@ -352,7 +391,7 @@ func (db *Database) rmDataObj(prefix byte) (dbObj, error) {
 	_, err := db.file.Read(buf)
 
 	for err == nil && buf[0] != prefix {
-		pos, _ = db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+		pos, _ = db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
 		_, err = db.file.Read(buf)
 	}
 
@@ -360,16 +399,16 @@ func (db *Database) rmDataObj(prefix byte) (dbObj, error) {
 		return dbObj{}, nil
 	}
 
-	buf = make([]byte, int64(dataObjSize)-1)
+	buf = make([]byte, int64(db.bitSize)-1)
 	_, err = db.file.Read(buf)
 
-	db.file.Seek(int64(dataObjSize) * -1, io.SeekCurrent)
+	db.file.Seek(int64(db.bitSize) * -1, io.SeekCurrent)
 	db.file.Write([]byte{'!'})
-	if debugMode {
-		db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-2))
+	if DebugMode {
+		db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize)-2))
 		db.file.Write([]byte{'\n'})
 	}else{
-		db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-1))
+		db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize)-1))
 	}
 
 	buf = bytes.TrimRight(buf, "-\n")
@@ -377,17 +416,17 @@ func (db *Database) rmDataObj(prefix byte) (dbObj, error) {
 	for reInd.Match(buf) {
 		buf = reInd.RepFunc(buf, func(data func(int) []byte) []byte {
 			if getPos, err := strconv.ParseInt(string(data(1)), 36, 64); err == nil {
-				db.file.Seek(getPos*int64(dataObjSize), io.SeekStart)
-				b := make([]byte, int64(dataObjSize))
+				db.file.Seek(getPos*int64(db.bitSize), io.SeekStart)
+				b := make([]byte, int64(db.bitSize))
 				_, err = db.file.Read(b)
 				if err == nil && b[0] == '&' {
-					db.file.Seek(int64(dataObjSize) * -1, io.SeekCurrent)
+					db.file.Seek(int64(db.bitSize) * -1, io.SeekCurrent)
 					db.file.Write([]byte{'!'})
-					if debugMode {
-						db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-2))
+					if DebugMode {
+						db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize)-2))
 						db.file.Write([]byte{'\n'})
 					}else{
-						db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-1))
+						db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize)-1))
 					}
 					
 					return bytes.TrimRight(b[1:], "-\n")
@@ -402,20 +441,19 @@ func (db *Database) rmDataObj(prefix byte) (dbObj, error) {
 		data = append(data, []byte{})
 	}
 
-	db.file.Seek(pos + int64(dataObjSize), io.SeekStart)
+	db.file.Seek(pos + int64(db.bitSize), io.SeekStart)
 
 	return dbObj{
 		key: data[0],
 		val: data[1],
-		line: pos / int64(dataObjSize),
+		line: pos / int64(db.bitSize),
 	}, nil
 }
 
-//todo: add method to set data over existing object
 func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, error) {
 	pos, _ := db.file.Seek(0, io.SeekCurrent)
 
-	if off := pos % int64(dataObjSize); off != 0 {
+	if off := pos % int64(db.bitSize); off != 0 {
 		db.file.Write(bytes.Repeat([]byte{'-'}, int(off)))
 		pos += off
 	}
@@ -424,7 +462,7 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 	_, err := db.file.Read(buf)
 
 	for err == nil && buf[0] != prefix {
-		pos, _ = db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+		pos, _ = db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
 		_, err = db.file.Read(buf)
 	}
 
@@ -434,55 +472,52 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 
 
 	// set data on object
-	addNew := false
-	_ = addNew
-
 	obj := dbObj{
 		key: key,
 		val: val,
-		line: pos / int64(dataObjSize),
+		line: pos / int64(db.bitSize),
 	}
 
 	val = regex.JoinBytes(key, '=', val)
 
 	// set data
 	off := 1
-	if debugMode {
+	if DebugMode {
 		off++
 	}
 
-	buf = make([]byte, int64(dataObjSize)-1)
+	buf = make([]byte, int64(db.bitSize)-1)
 	_, err = db.file.Read(buf)
-	oldPos, _ := db.file.Seek(int64(dataObjSize) * -1, io.SeekCurrent)
+	oldPos, _ := db.file.Seek(int64(db.bitSize) * -1, io.SeekCurrent)
 
 	buf = bytes.TrimRight(buf, "-\n")
 	reInd := regex.Comp(`[\-\n]*@([a-z0-9]+)$`)
 	for err == nil && reInd.Match(buf) {
 		buf = reInd.RepFunc(buf, func(data func(int) []byte) []byte {
 			if getPos, err := strconv.ParseInt(string(data(1)), 36, 64); err == nil {
-				newPos, err := db.file.Seek(getPos*int64(dataObjSize), io.SeekStart)
-				b := make([]byte, int64(dataObjSize))
+				newPos, err := db.file.Seek(getPos*int64(db.bitSize), io.SeekStart)
+				b := make([]byte, int64(db.bitSize))
 				_, err = db.file.Read(b)
 				if err == nil && b[0] == '&' {
 					if len(val) == 0 {
 						db.file.Seek(oldPos, io.SeekStart)
 						db.file.Write([]byte{'!'})
-						if debugMode {
-							db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-2))
+						if DebugMode {
+							db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize)-2))
 							db.file.Write([]byte{'\n'})
 						}else{
-							db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-1))
+							db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize)-1))
 						}
 					}else{
 						db.file.Seek(oldPos+1, io.SeekStart)
 
-						if len(val) + off > int(dataObjSize) {
-							posStr := []byte(strconv.FormatInt(newPos / int64(dataObjSize), 36))
+						if len(val) + off > int(db.bitSize) {
+							posStr := []byte(strconv.FormatInt(newPos / int64(db.bitSize), 36))
 
 							posStr = append([]byte{'@'}, posStr...)
-							offset := int(dataObjSize) - len(posStr) - 1
+							offset := int(db.bitSize) - len(posStr) - 1
 
-							if debugMode {
+							if DebugMode {
 								offset--
 							}
 
@@ -490,17 +525,17 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 							db.file.Write(posStr)
 							val = val[offset:]
 
-							if debugMode {
+							if DebugMode {
 								db.file.Write([]byte{'\n'})
 							}
 						}else{
 							db.file.Write(val)
-							if len(val) < int(dataObjSize) {
-								if debugMode {
-									db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 2))
+							if len(val) < int(db.bitSize) {
+								if DebugMode {
+									db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize) - len(val) - 2))
 									db.file.Write([]byte{'\n'})
 								}else{
-									db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 1))
+									db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize) - len(val) - 1))
 								}
 							}
 							val = []byte{}
@@ -527,58 +562,58 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 
 
 	// finish adding new value
-	buf = make([]byte, int64(dataObjSize))
+	buf = make([]byte, int64(db.bitSize))
 	_, err = db.file.Read(buf)
 	if err == nil && buf[0] == '&' {
 		if len(val) == 0 {
 			db.file.Seek(oldPos, io.SeekStart)
 			db.file.Write([]byte{'!'})
-			if debugMode {
-				db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-2))
+			if DebugMode {
+				db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize)-2))
 				db.file.Write([]byte{'\n'})
 			}else{
-				db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize)-1))
+				db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize)-1))
 			}
 		}else{
 			db.file.Seek(oldPos+1, io.SeekStart)
-			posLine := oldPos / int64(dataObjSize)
-			_ = posLine
+			posLine := oldPos / int64(db.bitSize)
 
-			if len(val) + off > int(dataObjSize) {
+			if len(val) + off > int(db.bitSize) {
 				var posStr []byte
 				var useNewPos int64 = -1
 
 				curPos, _ := db.file.Seek(0, io.SeekCurrent)
-				// db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
 				db.file.Seek(0, io.SeekStart)
-				_ = curPos
 
 				buf = make([]byte, 1)
 				_, err = db.file.Read(buf)
 				for err == nil && buf[0] != '!' {
-					db.file.Seek(int64(dataObjSize)-1, io.SeekCurrent)
+					db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
 					_, err = db.file.Read(buf)
 				}
 
+				addNew := false
+
 				if err == io.EOF {
+					addNew = true
 					newPos, _ := db.file.Seek(0, io.SeekEnd)
 					useNewPos = newPos
-					newPos /= int64(dataObjSize)
+					newPos /= int64(db.bitSize)
 					posStr = []byte(strconv.FormatInt(newPos, 36))
 					posLine = newPos
 				}else{
 					newPos, _ := db.file.Seek(-1, io.SeekCurrent)
 					useNewPos = newPos
-					newPos /= int64(dataObjSize)
+					newPos /= int64(db.bitSize)
 					posStr = []byte(strconv.FormatInt(newPos, 36))
 				}
 	
 				db.file.Seek(curPos, io.SeekStart)
 
 				posStr = append([]byte{'@'}, posStr...)
-				offset := int(dataObjSize) - len(posStr) - 1
+				offset := int(db.bitSize) - len(posStr) - 1
 
-				if debugMode {
+				if DebugMode {
 					offset--
 				}
 
@@ -586,7 +621,7 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 				db.file.Write(posStr)
 				val = val[offset:]
 
-				if debugMode {
+				if DebugMode {
 					db.file.Write([]byte{'\n'})
 				}
 
@@ -596,33 +631,84 @@ func (db *Database) setDataObj(prefix byte, key []byte, val []byte) (dbObj, erro
 
 				db.file.Write([]byte{'&'})
 
-				for len(val) + off > int(dataObjSize) {
-					//todo: finish adding value
-					// use the addDataObj method as a reference
-					// this method will mainly just run the bulk of that method at this step in the process
+				for len(val) + off > int(db.bitSize) {
+					var posStr []byte
+					var useNewPos int64 = -1
 
-					break
+					if !addNew {
+						curPos, _ := db.file.Seek(0, io.SeekCurrent)
+						db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
+			
+						_, err = db.file.Read(buf)
+						for err == nil && buf[0] != '!' {
+							db.file.Seek(int64(db.bitSize)-1, io.SeekCurrent)
+							_, err = db.file.Read(buf)
+						}
+			
+						if err == io.EOF {
+							addNew = true
+							newPos, _ := db.file.Seek(0, io.SeekEnd)
+							useNewPos = newPos
+							newPos /= int64(db.bitSize)
+							posStr = []byte(strconv.FormatInt(newPos, 36))
+							posLine = newPos
+						}else{
+							newPos, _ := db.file.Seek(-1, io.SeekCurrent)
+							useNewPos = newPos
+							newPos /= int64(db.bitSize)
+							posStr = []byte(strconv.FormatInt(newPos, 36))
+						}
+			
+						db.file.Seek(curPos, io.SeekStart)
+					}else if addNew {
+						posLine++
+						posStr = []byte(strconv.FormatInt(posLine, 36))
+					}
+			
+					posStr = append([]byte{'@'}, posStr...)
+					offset := int(db.bitSize) - len(posStr) - 1
+			
+					if DebugMode {
+						offset--
+					}
+			
+					db.file.Write(val[:offset])
+					db.file.Write(posStr)
+					val = val[offset:]
+			
+					if DebugMode {
+						db.file.Write([]byte{'\n'})
+					}
+			
+					if useNewPos != -1 {
+						db.file.Seek(useNewPos, io.SeekStart)
+					}
+			
+					db.file.Write([]byte{'&'})
+				}
+
+				db.file.Write(val)
+				if len(val) < int(db.bitSize) {
+					if DebugMode {
+						db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize) - len(val) - 2))
+						db.file.Write([]byte{'\n'})
+					}else{
+						db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize) - len(val) - 1))
+					}
 				}
 			}else{
 				db.file.Write(val)
-				if len(val) < int(dataObjSize) {
-					if debugMode {
-						db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 2))
+				if len(val) < int(db.bitSize) {
+					if DebugMode {
+						db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize) - len(val) - 2))
 						db.file.Write([]byte{'\n'})
 					}else{
-						db.file.Write(bytes.Repeat([]byte{'-'}, int(dataObjSize) - len(val) - 1))
+						db.file.Write(bytes.Repeat([]byte{'-'}, int(db.bitSize) - len(val) - 1))
 					}
 				}
 			}
 		}
 	}
-
-
-	//todo: replace this less preformant method with a better one
-	// note: this method needs to use the same starting point for the data object being changed,
-	// to avoid the need to update table values, and to better optimize the database performance
-	// db.rmDataObj(prefix)
-	// db.addDataObj(prefix, key, val)
 
 	return obj, nil
 }
@@ -743,13 +829,13 @@ func (db *Database) DelTable(name string) (*Table, error) {
 		return &Table{db: db}, err
 	}
 
-	db.file.Seek(table.line * int64(dataObjSize), io.SeekStart)
+	db.file.Seek(table.line * int64(db.bitSize), io.SeekStart)
 	db.rmDataObj('$')
 
 	rowList := bytes.Split(table.val, []byte{','})
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
-			db.file.Seek(line * int64(dataObjSize), io.SeekStart)
+			db.file.Seek(line * int64(db.bitSize), io.SeekStart)
 			db.rmDataObj(':')
 		}
 	}
@@ -763,6 +849,10 @@ func (db *Database) DelTable(name string) (*Table, error) {
 	}, nil
 }
 
+func (db *Database) Optimize() (*Database, error) {
+	return db, nil
+}
+
 // Rename changes the name of the table
 //
 // this method returns the updated table
@@ -772,7 +862,7 @@ func (table *Table) Rename(name string) (*Table, error) {
 		return r == 0
 	})
 
-	table.db.file.Seek(table.line * int64(dataObjSize), io.SeekStart)
+	table.db.file.Seek(table.line * int64(table.db.bitSize), io.SeekStart)
 	tb, err := table.db.setDataObj('$', keyB, table.val)
 	if err != nil {
 		return table, err
@@ -808,7 +898,7 @@ func (table *Table) AddRow(key string, value string) (*Row, error) {
 		return &Row{table: table}, err
 	}
 
-	table.db.file.Seek(table.line * int64(dataObjSize), io.SeekStart)
+	table.db.file.Seek(table.line * int64(table.db.bitSize), io.SeekStart)
 	if len(table.val) == 0 {
 		table.val = []byte(strconv.FormatInt(row.line, 36))
 	}else{
@@ -840,7 +930,7 @@ func (table *Table) GetRow(key string) (*Row, error) {
 	rowList := bytes.Split(table.val, []byte{','})
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
-			table.db.file.Seek(line * int64(dataObjSize), io.SeekStart)
+			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
 			if row, err := table.db.getDataObj(':', keyB, []byte{0}, true); err == nil {
 				newRow := &Row{
 					table: table,
@@ -875,7 +965,7 @@ func (table *Table) FindRows(key []byte, value []byte) ([]*Row, error) {
 	rowList := bytes.Split(table.val, []byte{','})
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
-			table.db.file.Seek(line * int64(dataObjSize), io.SeekStart)
+			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
 			if row, err := table.db.getDataObj(':', key, value, true); err == nil {
 				newRow := &Row{
 					table: table,
@@ -912,9 +1002,9 @@ func (table *Table) DelRow(key string) (*Row, error) {
 	rowList := bytes.Split(table.val, []byte{','})
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
-			table.db.file.Seek(line * int64(dataObjSize), io.SeekStart)
+			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
 			if row, err := table.db.getDataObj(':', keyB, []byte{0}, true); err == nil {
-				table.db.file.Seek(row.line * int64(dataObjSize), io.SeekStart)
+				table.db.file.Seek(row.line * int64(table.db.bitSize), io.SeekStart)
 				table.db.rmDataObj(':')
 
 				//todo: remove row from table cache
@@ -946,7 +1036,7 @@ func (row *Row) Rename(key string) (*Row, error) {
 		return r == 0
 	})
 
-	row.table.db.file.Seek(row.line * int64(dataObjSize), io.SeekStart)
+	row.table.db.file.Seek(row.line * int64(row.table.db.bitSize), io.SeekStart)
 	rw, err := row.table.db.setDataObj('$', keyB, valB)
 	if err != nil {
 		return row, err
@@ -974,7 +1064,7 @@ func (row *Row) SetValue(value string) (*Row, error) {
 		return r == 0
 	})
 
-	row.table.db.file.Seek(row.line * int64(dataObjSize), io.SeekStart)
+	row.table.db.file.Seek(row.line * int64(row.table.db.bitSize), io.SeekStart)
 	rw, err := row.table.db.setDataObj('$', keyB, valB)
 	if err != nil {
 		return row, err
