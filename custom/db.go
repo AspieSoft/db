@@ -1,8 +1,8 @@
-package main
+package custom
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/AspieSoft/go-regex-re2/v2"
-	"github.com/alphadose/haxmap"
+	"github.com/AspieSoft/goutil/v7"
 )
 
 const DebugMode = true
@@ -22,9 +22,11 @@ type Database struct {
 	path string
 	bitSize uint16
 	prefixList []byte
-	cache *haxmap.Map[string, *Table]
 	mu sync.Mutex
-	bitStartOffset int64
+}
+
+type CustomDB struct {
+	prefixList []byte
 }
 
 type dbObj struct {
@@ -36,45 +38,26 @@ type dbObj struct {
 	oldVal []byte
 }
 
-func main(){
-	db, err := Open("test.db", 16)
-	if err != nil {
-		panic(err)
+
+func New(prefixList []byte, bitSize uint16) (*CustomDB, error) {
+	for _, prefix := range prefixList {
+		if goutil.Contains([]byte("%=,@-!"), prefix) {
+			return &CustomDB{}, errors.New("'"+string(prefix)+"' is a core prefix")
+		}
 	}
 
-	if DebugMode {
-		_ = fmt.Print
-		db.file.Truncate(0)
-	}
+	return &CustomDB{
 
-	db.AddTable("MyTable")
-	table2, err := db.AddTable("MyTable2")
-	table, err := db.GetTable("MyTable")
-	table.AddRow("Row1", "val1")
-	table.AddRow("Row2", "val2")
-	table.GetRow("Row1")
-	table2.Del()
-	// db.DelTable("MyTable2")
-
-	//todo: use this to test the setDataObj method
-	/* db.addDataObj('$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte("test"))
-
-	db.file.Seek(0, io.SeekStart)
-	db.getDataObj('$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte{0})
-
-	db.file.Seek(0, io.SeekStart)
-	db.setDataObj('$', []byte("MyTable"), []byte("MyVal"))
-	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger"))
-	// db.setDataObj('$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger_MoreTextToMakeThisLonger")) */
-
-	db.Optimize()
+	}, nil
 }
 
+func Open(path string, bitSize uint16, prefixList []byte) (*Database, error) {
+	for _, prefix := range prefixList {
+		if goutil.Contains([]byte("%=,@-!"), prefix) {
+			return &Database{}, errors.New("'"+string(prefix)+"' is a core prefix")
+		}
+	}
 
-// Open opens an existing database or creates a new one
-//
-// @bitSize tells the database what bit size to use
-func Open(path string, bitSize uint16) (*Database, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return &Database{}, err
@@ -95,33 +78,11 @@ func Open(path string, bitSize uint16) (*Database, error) {
 		bitSize = 64000
 	}
 
-
-	// fix bit size
-	bitSizeStr := []byte(strconv.FormatUint(uint64(bitSize), 36))
-
-	buf := make([]byte, 8)
-	size, err := file.ReadAt(buf, 0)
-	buf =  bytes.TrimRight(buf[:size], "-\n")
-	//todo
-	if err != nil || len(buf) == 0 || true {
-		file.WriteAt(bitSizeStr, 0)
-		file.WriteAt(bytes.Repeat([]byte{'-'}, 8 - len(bitSizeStr)), int64(len(bitSizeStr)))
-		if DebugMode {
-			file.WriteAt([]byte{'\n'}, 7)
-		}
-		// return nil, errors.New("test")
-	}else if i, err := strconv.ParseUint(string(buf), 36, 16); err == nil && bitSize != uint16(i) {
-		
-	}
-
-
 	return &Database{
 		file: file,
 		path: path,
 		bitSize: bitSize,
 		prefixList: []byte("$:"),
-		cache: haxmap.New[string, *Table](),
-		bitStartOffset: int64(bitSize),
 	}, nil
 }
 
@@ -138,62 +99,6 @@ func (db *Database) Close() error {
 	}
 	return err2
 }
-
-
-/* func (db *Database) optimizeBitSize(oldSize uint16) (error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	db.file.Sync()
-
-	file, err := os.OpenFile(db.path+".opt", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0755)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	newDB := &Database{
-		file: file,
-		path: db.path+".opt",
-		bitSize: db.bitSize,
-	}
-
-	tableList, err := db.FindTables([]byte{0})
-	if err != nil {
-		return nil
-	}
-
-	newTables := make([]*Table, len(tableList))
-	for i, table := range tableList {
-		if tb, err := newDB.AddTable(table.Name); err == nil {
-			newTables[i] = tb
-		}
-	}
-
-	for i, table := range tableList {
-		if tb := newTables[i]; tb != nil {
-			if rowList, err := table.FindRows([]byte{0}, []byte{0}); err == nil {
-				for _, row := range rowList {
-					tb.AddRow(row.Key, row.Value)
-				}
-			}
-		}
-	}
-
-	file.Sync()
-	file.Close()
-	db.file.Close()
-	os.Remove(db.path)
-	os.Rename(db.path+".opt", db.path)
-
-	file, err = os.OpenFile(db.path, os.O_CREATE|os.O_RDWR, 0755)
-	db.file = file
-	if err != nil {
-		return err
-	}
-
-	return nil
-} */
 
 
 
@@ -791,3 +696,4 @@ func setDataObj(db *Database, prefix byte, key []byte, val []byte) (dbObj, error
 
 	return obj, nil
 }
+

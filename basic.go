@@ -32,15 +32,15 @@ type Row struct {
 // and will move existing tables to the top of the database file for quicker access
 //
 // row indexes are referenced from the tables, so having tables at the top is best for performance
-func (db *Database) Optimize() (*Database, error) {
+func (db *Database) Optimize() (error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	
+
 	db.file.Sync()
-	
+
 	file, err := os.OpenFile(db.path+".opt", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0755)
 	if err != nil {
-		return db, err
+		return err
 	}
 	defer file.Close()
 
@@ -50,9 +50,9 @@ func (db *Database) Optimize() (*Database, error) {
 		bitSize: db.bitSize,
 	}
 
-	tableList, err := db.FindTables([]byte{0})
+	tableList, err := db.FindTables([]byte{0}, true)
 	if err != nil {
-		return db, nil
+		return nil
 	}
 
 	newTables := make([]*Table, len(tableList))
@@ -64,7 +64,7 @@ func (db *Database) Optimize() (*Database, error) {
 
 	for i, table := range tableList {
 		if tb := newTables[i]; tb != nil {
-			if rowList, err := table.FindRows([]byte{0}, []byte{0}); err == nil {
+			if rowList, err := table.FindRows([]byte{0}, []byte{0}, true); err == nil {
 				for _, row := range rowList {
 					tb.AddRow(row.Key, row.Value)
 				}
@@ -81,27 +81,29 @@ func (db *Database) Optimize() (*Database, error) {
 	file, err = os.OpenFile(db.path, os.O_CREATE|os.O_RDWR, 0755)
 	db.file = file
 	if err != nil {
-		return db, err
+		return err
 	}
 
-	return db, nil
+	return nil
 }
 
 
 // AddTable adds a new table to the database
 // this method returns the new table
-func (db *Database) AddTable(name string) (*Table, error) {
+func (db *Database) AddTable(name string, noLock ...bool) (*Table, error) {
 	keyB := goutil.Clean.Bytes([]byte(name))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
 	})
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		db.mu.Lock()
+		defer db.mu.Unlock()
+	}
 
 	// ensure table does not already exist
 	db.file.Seek(0, io.SeekStart)
-	if table, err := GetDataObj(db, '$', keyB, []byte{0}); err == nil {
+	if table, err := getDataObj(db, '$', keyB, []byte{0}); err == nil {
 		return &Table{
 			db: db,
 			Name: string(table.key),
@@ -111,7 +113,7 @@ func (db *Database) AddTable(name string) (*Table, error) {
 		}, errors.New("table already exists")
 	}
 
-	table, err := AddDataObj(db, '$', keyB, []byte{})
+	table, err := addDataObj(db, '$', keyB, []byte{})
 	if err != nil {
 		return &Table{db: db}, err
 	}
@@ -130,19 +132,21 @@ func (db *Database) AddTable(name string) (*Table, error) {
 }
 
 // GetTable retrieves an existing table from the database
-func (db *Database) GetTable(name string) (*Table, error) {
+func (db *Database) GetTable(name string, noLock ...bool) (*Table, error) {
 	keyB := goutil.Clean.Bytes([]byte(name))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
 	})
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		db.mu.Lock()
+		defer db.mu.Unlock()
+	}
 
 	//todo: get table from cache
 
 	db.file.Seek(0, io.SeekStart)
-	table, err := GetDataObj(db, '$', keyB, []byte{0})
+	table, err := getDataObj(db, '$', keyB, []byte{0})
 	if err != nil {
 		return &Table{db: db}, err
 	}
@@ -170,15 +174,17 @@ func (db *Database) GetTable(name string) (*Table, error) {
 //
 // if you are dealing with user input, it is recommended to sanitize it and remove the first byte of 0,
 // to ensure the input cannot run regex, and will be treated as a literal string
-func (db *Database) FindTables(name []byte) ([]*Table, error) {
+func (db *Database) FindTables(name []byte, noLock ...bool) ([]*Table, error) {
 	resTables := []*Table{}
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		db.mu.Lock()
+		defer db.mu.Unlock()
+	}
 
 	db.file.Seek(0, io.SeekStart)
 	for {
-		table, err := GetDataObj(db, '$', name, []byte{0})
+		table, err := getDataObj(db, '$', name, []byte{0})
 		if err != nil {
 			break
 		}
@@ -204,18 +210,20 @@ func (db *Database) FindTables(name []byte) ([]*Table, error) {
 }
 
 // Del removes the table from the database
-func (table *Table) Del() error {
-	table.db.mu.Lock()
-	defer table.db.mu.Unlock()
+func (table *Table) Del(noLock ...bool) error {
+	if len(noLock) == 0 || noLock[0] == false {
+		table.db.mu.Lock()
+		defer table.db.mu.Unlock()
+	}
 	
 	table.db.file.Seek(table.line * int64(table.db.bitSize), io.SeekStart)
-	_, err := DelDataObj(table.db, '$')
+	_, err := delDataObj(table.db, '$')
 
 	rowList := bytes.Split(table.val, []byte{','})
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
 			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
-			DelDataObj(table.db, ':')
+			delDataObj(table.db, ':')
 		}
 	}
 
@@ -225,17 +233,19 @@ func (table *Table) Del() error {
 }
 
 // Rename changes the name of the table
-func (table *Table) Rename(name string) error {
+func (table *Table) Rename(name string, noLock ...bool) error {
 	keyB := goutil.Clean.Bytes([]byte(name))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
 	})
 
-	table.db.mu.Lock()
-	defer table.db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		table.db.mu.Lock()
+		defer table.db.mu.Unlock()
+	}
 
 	table.db.file.Seek(table.line * int64(table.db.bitSize), io.SeekStart)
-	tb, err := SetDataObj(table.db, '$', keyB, table.val)
+	tb, err := setDataObj(table.db, '$', keyB, table.val)
 	if err != nil {
 		return err
 	}
@@ -253,7 +263,7 @@ func (table *Table) Rename(name string) error {
 // AddRow adds a new key value pair to the table
 //
 // this method returns the new row
-func (table *Table) AddRow(key string, value string) (*Row, error) {
+func (table *Table) AddRow(key string, value string, noLock ...bool) (*Row, error) {
 	keyB := goutil.Clean.Bytes([]byte(key))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
@@ -264,15 +274,17 @@ func (table *Table) AddRow(key string, value string) (*Row, error) {
 		return r == 0
 	})
 
-	table.db.mu.Lock()
-	defer table.db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		table.db.mu.Lock()
+		defer table.db.mu.Unlock()
+	}
 
 	// ensure row does not already exist
 	rowList := bytes.Split(table.val, []byte{','})
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
 			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
-			if row, err := GetDataObj(table.db, ':', keyB, []byte{0}, true); err == nil {
+			if row, err := getDataObj(table.db, ':', keyB, []byte{0}, true); err == nil {
 				newRow := &Row{
 					table: table,
 					Key: string(row.key),
@@ -287,7 +299,7 @@ func (table *Table) AddRow(key string, value string) (*Row, error) {
 		}
 	}
 
-	row, err := AddDataObj(table.db, ':', keyB, valB)
+	row, err := addDataObj(table.db, ':', keyB, valB)
 	if err != nil {
 		return &Row{table: table}, err
 	}
@@ -298,7 +310,7 @@ func (table *Table) AddRow(key string, value string) (*Row, error) {
 	}else{
 		table.val = append(table.val, append([]byte{','}, strconv.FormatInt(row.line, 36)...)...)
 	}
-	SetDataObj(table.db, '$', table.key, table.val)
+	setDataObj(table.db, '$', table.key, table.val)
 
 	newRow := &Row{
 		table: table,
@@ -313,14 +325,16 @@ func (table *Table) AddRow(key string, value string) (*Row, error) {
 }
 
 // GetRow retrieves an existing row from the table
-func (table *Table) GetRow(key string) (*Row, error) {
+func (table *Table) GetRow(key string, noLock ...bool) (*Row, error) {
 	keyB := goutil.Clean.Bytes([]byte(key))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
 	})
 
-	table.db.mu.Lock()
-	defer table.db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		table.db.mu.Lock()
+		defer table.db.mu.Unlock()
+	}
 
 	//todo: get row from table cache
 
@@ -328,7 +342,7 @@ func (table *Table) GetRow(key string) (*Row, error) {
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
 			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
-			if row, err := GetDataObj(table.db, ':', keyB, []byte{0}, true); err == nil {
+			if row, err := getDataObj(table.db, ':', keyB, []byte{0}, true); err == nil {
 				newRow := &Row{
 					table: table,
 					Key: string(row.key),
@@ -356,17 +370,19 @@ func (table *Table) GetRow(key string) (*Row, error) {
 //
 // if you are dealing with user input, it is recommended to sanitize it and remove the first byte of 0,
 // to ensure the input cannot run regex, and will be treated as a literal string
-func (table *Table) FindRows(key []byte, value []byte) ([]*Row, error) {
+func (table *Table) FindRows(key []byte, value []byte, noLock ...bool) ([]*Row, error) {
 	resRow := []*Row{}
 
-	table.db.mu.Lock()
-	defer table.db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		table.db.mu.Lock()
+		defer table.db.mu.Unlock()
+	}
 
 	rowList := bytes.Split(table.val, []byte{','})
 	for _, rowLine := range rowList {
 		if line, err := strconv.ParseInt(string(rowLine), 36, 64); err == nil {
 			table.db.file.Seek(line * int64(table.db.bitSize), io.SeekStart)
-			if row, err := GetDataObj(table.db, ':', key, value, true); err == nil {
+			if row, err := getDataObj(table.db, ':', key, value, true); err == nil {
 				newRow := &Row{
 					table: table,
 					Key: string(row.key),
@@ -389,12 +405,14 @@ func (table *Table) FindRows(key []byte, value []byte) ([]*Row, error) {
 }
 
 // DelRow removes the key value pair from the table
-func (row *Row) Del() error {
-	row.table.db.mu.Lock()
-	defer row.table.db.mu.Unlock()
+func (row *Row) Del(noLock ...bool) error {
+	if len(noLock) == 0 || noLock[0] == false {
+		row.table.db.mu.Lock()
+		defer row.table.db.mu.Unlock()
+	}
 
 	row.table.db.file.Seek(row.line * int64(row.table.db.bitSize), io.SeekStart)
-	_, err := DelDataObj(row.table.db, ':')
+	_, err := delDataObj(row.table.db, ':')
 	
 	row.line = -1
 
@@ -402,14 +420,16 @@ func (row *Row) Del() error {
 }
 
 // Rename changes the key of the row
-func (row *Row) Rename(key string) error {
+func (row *Row) Rename(key string, noLock ...bool) error {
 	keyB := goutil.Clean.Bytes([]byte(key))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
 		return r == 0
 	})
 
-	row.table.db.mu.Lock()
-	defer row.table.db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		row.table.db.mu.Lock()
+		defer row.table.db.mu.Unlock()
+	}
 
 	valB := goutil.Clean.Bytes([]byte(row.Value))
 	valB = bytes.TrimLeftFunc(valB, func(r rune) bool {
@@ -417,7 +437,7 @@ func (row *Row) Rename(key string) error {
 	})
 
 	row.table.db.file.Seek(row.line * int64(row.table.db.bitSize), io.SeekStart)
-	rw, err := SetDataObj(row.table.db, '$', keyB, valB)
+	rw, err := setDataObj(row.table.db, '$', keyB, valB)
 	if err != nil {
 		return err
 	}
@@ -431,14 +451,16 @@ func (row *Row) Rename(key string) error {
 }
 
 // SetValue changes the value of the row
-func (row *Row) SetValue(value string) error {
+func (row *Row) SetValue(value string, noLock ...bool) error {
 	valB := goutil.Clean.Bytes([]byte(value))
 	valB = bytes.TrimLeftFunc(valB, func(r rune) bool {
 		return r == 0
 	})
 
-	row.table.db.mu.Lock()
-	defer row.table.db.mu.Unlock()
+	if len(noLock) == 0 || noLock[0] == false {
+		row.table.db.mu.Lock()
+		defer row.table.db.mu.Unlock()
+	}
 
 	keyB := goutil.Clean.Bytes([]byte(row.Key))
 	keyB = bytes.TrimLeftFunc(keyB, func(r rune) bool {
@@ -446,7 +468,7 @@ func (row *Row) SetValue(value string) error {
 	})
 
 	row.table.db.file.Seek(row.line * int64(row.table.db.bitSize), io.SeekStart)
-	rw, err := SetDataObj(row.table.db, '$', keyB, valB)
+	rw, err := setDataObj(row.table.db, '$', keyB, valB)
 	if err != nil {
 		return err
 	}
