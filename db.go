@@ -1,8 +1,7 @@
-package custom
+package db
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,10 +9,10 @@ import (
 	"sync"
 
 	"github.com/AspieSoft/go-regex-re2/v2"
-	"github.com/AspieSoft/goutil/v7"
+	"github.com/alphadose/haxmap"
 )
 
-const DebugMode = true
+var DebugMode = false
 
 const maxDatabaseSize uint64 = 99999999999999 // 14 (64000 bit - max lines = 1 billion)
 
@@ -22,11 +21,8 @@ type Database struct {
 	path string
 	bitSize uint16
 	prefixList []byte
+	cache *haxmap.Map[string, *Table]
 	mu sync.Mutex
-}
-
-type CustomDB struct {
-	prefixList []byte
 }
 
 type dbObj struct {
@@ -39,25 +35,11 @@ type dbObj struct {
 }
 
 
-func New(prefixList []byte, bitSize uint16) (*CustomDB, error) {
-	for _, prefix := range prefixList {
-		if goutil.Contains([]byte("%=,@-!"), prefix) {
-			return &CustomDB{}, errors.New("'"+string(prefix)+"' is a core prefix")
-		}
-	}
-
-	return &CustomDB{
-
-	}, nil
-}
-
-func Open(path string, bitSize uint16, prefixList []byte) (*Database, error) {
-	for _, prefix := range prefixList {
-		if goutil.Contains([]byte("%=,@-!"), prefix) {
-			return &Database{}, errors.New("'"+string(prefix)+"' is a core prefix")
-		}
-	}
-
+// Open opens an existing database or creates a new one
+//
+// @bitSize tells the database what bit size to use (this value must always be consistant)
+// (default: 1024)
+func Open(path string, bitSize ...uint16) (*Database, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return &Database{}, err
@@ -67,22 +49,28 @@ func Open(path string, bitSize uint16, prefixList []byte) (*Database, error) {
 	if err != nil {
 		return &Database{}, err
 	}
+	
+	bSize := uint16(0)
+	if len(bitSize) != 0 {
+		bSize = bitSize[0]
+	}
 
-	if bitSize == 0 {
-		bitSize = 1024
-	}else if DebugMode && bitSize < 16 {
-		bitSize = 16
-	}else if !DebugMode && bitSize < 64 {
-		bitSize = 64
-	}else if bitSize > 64000 {
-		bitSize = 64000
+	if bSize == 0 {
+		bSize = 1024
+	}else if DebugMode && bSize < 16 {
+		bSize = 16
+	}else if !DebugMode && bSize < 64 {
+		bSize = 64
+	}else if bSize > 64000 {
+		bSize = 64000
 	}
 
 	return &Database{
 		file: file,
 		path: path,
-		bitSize: bitSize,
+		bitSize: bSize,
 		prefixList: []byte("$:"),
+		cache: haxmap.New[string, *Table](),
 	}, nil
 }
 
@@ -99,7 +87,6 @@ func (db *Database) Close() error {
 	}
 	return err2
 }
-
 
 
 //todo: consider adding an automated method to handle possible long term errors down the road
@@ -696,4 +683,3 @@ func setDataObj(db *Database, prefix byte, key []byte, val []byte) (dbObj, error
 
 	return obj, nil
 }
-
