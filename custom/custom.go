@@ -86,22 +86,9 @@ func (db *Database) Close() error {
 }
 
 
-//todo: consider adding an automated method to handle possible long term errors down the road
-// example: if the (@n) index gets too large, the bit size may need to increase (unless the data being added is too large to be normal)
-// example: if the pos in the file starts to get close to the integer limit, a new file (i.e. test.1.db) may need to extend the existing file to hold more data
-//  this senerio may also require the first file to be moved to an index (i.e. test.0.db), and placed inside a folder with the original name (i.e. test.db - folder)
-// example: handle potential power outage recovery. keep a queue of database operations inside a file (using the core database functions for simplicity, but in a different format)
-
-//todo: add an optional `AdvancedDatabase` struct that allows users to utilize the core methods and build their own database structure
-// users should also be able to choose the default bit size, and what data object prefixes to use (which will need to be escaped)
-// the core prefixes should also be escaped, and should warn users that they exist, incase they try to add one of them into their prefix list
-// core prefixes: [%=,@-!], and debug char [\n]
-// default database prefixes: [$:] (note: do not allow users to use whitespace characters as prefixes)
-
-
-//todo: add compression and (optional) encryption to core database methods
-// also ensure values do not include special chars from database syntax [%$:=,@-!]
-
+// AddDataObj adds a new key value pair to the database, given a prefix
+//
+// note: this method also runs `File.Seek(0, io.SeekStart)`
 func AddDataObj(db *Database, prefix byte, key []byte, val []byte) (Object, error) {
 	pos, _ := db.File.Seek(0, io.SeekStart)
 
@@ -212,6 +199,9 @@ func AddDataObj(db *Database, prefix byte, key []byte, val []byte) (Object, erro
 	return obj, nil
 }
 
+// GetDataObj finds a key value pair in the database, given a prefix
+//
+// set the first byte of the key/val param to 0 to authorize the use of regex
 func GetDataObj(db *Database, prefix byte, key []byte, val []byte, stopAfterFirstRow ...bool) (Object, error) {
 	regTypeKey := uint8(0)
 	regTypeVal := uint8(0)
@@ -347,6 +337,7 @@ func GetDataObj(db *Database, prefix byte, key []byte, val []byte, stopAfterFirs
 	return Object{}, io.EOF
 }
 
+// DelDataObj removes a key value pair from the database, given a prefix
 func DelDataObj(db *Database, prefix byte) (Object, error) {
 	pos, _ := db.File.Seek(0, io.SeekCurrent)
 
@@ -418,6 +409,9 @@ func DelDataObj(db *Database, prefix byte) (Object, error) {
 	}, nil
 }
 
+// SetDataObj replaces an old key value pair with a new one
+//
+// note: it is your job to run the `File.Seek` method, and start at the correct position
 func SetDataObj(db *Database, prefix byte, key []byte, val []byte) (Object, error) {
 	pos, _ := db.File.Seek(0, io.SeekCurrent)
 
