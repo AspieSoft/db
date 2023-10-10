@@ -10,7 +10,9 @@ import (
 	"sync"
 
 	"github.com/AspieSoft/go-regex-re2/v2"
+	"github.com/AspieSoft/goutil/crypt"
 	"github.com/AspieSoft/goutil/v7"
+	"github.com/cespare/go-smaz"
 )
 
 const DebugMode = true
@@ -23,6 +25,7 @@ type Database struct {
 	BitSize uint16
 	PrefixList []byte
 	MU sync.Mutex
+	encKey []byte
 }
 
 type Object struct {
@@ -39,9 +42,9 @@ type Object struct {
 //
 // @bitSize tells the database what bit size to use (this value must always be consistant)
 // (default: 1024)
-func Open(path string, bitSize uint16, prefixList []byte) (*Database, error) {
+func Open(path string, encKey []byte, bitSize uint16, prefixList []byte) (*Database, error) {
 	for _, prefix := range prefixList {
-		if goutil.Contains([]byte("%=,@-!"), prefix) {
+		if goutil.Contains([]byte("%=,@-!\n"), prefix) {
 			return &Database{}, errors.New("'"+string(prefix)+"' is reserved for the core database structure")
 		}
 	}
@@ -71,6 +74,7 @@ func Open(path string, bitSize uint16, prefixList []byte) (*Database, error) {
 		Path: path,
 		BitSize: bitSize,
 		PrefixList: prefixList,
+		encKey: encKey,
 	}, nil
 }
 
@@ -122,6 +126,11 @@ func AddDataObj(db *Database, prefix byte, key []byte, val []byte) (Object, erro
 	}
 
 	val = regex.JoinBytes(key, '=', val)
+
+	val, err = encData(db, val)
+	if err != nil {
+		return Object{}, err
+	}
 
 	posLine := pos / int64(db.BitSize)
 
@@ -212,6 +221,8 @@ func GetDataObj(db *Database, prefix byte, key []byte, val []byte, stopAfterFirs
 	var reVal *regex.Regexp
 	var err error
 
+	var encErr error
+
 	if len(key) != 0 && key[0] == 0 {
 		regTypeKey = 1
 		key = key[1:]
@@ -288,6 +299,19 @@ func GetDataObj(db *Database, prefix byte, key []byte, val []byte, stopAfterFirs
 				})
 			}
 
+			buf, encErr = decData(db, buf)
+			if encErr != nil {
+				db.File.Seek(pos + int64(db.BitSize), io.SeekStart)
+				buf = make([]byte, 1)
+				_, err = db.File.Read(buf)
+
+				if stopFirstRow {
+					return Object{}, encErr
+				}
+
+				continue
+			}
+
 			data := bytes.SplitN(buf, []byte{'='}, 2)
 			if len(data) == 0 {
 				db.File.Seek(pos + int64(db.BitSize), io.SeekStart)
@@ -295,6 +319,9 @@ func GetDataObj(db *Database, prefix byte, key []byte, val []byte, stopAfterFirs
 				_, err = db.File.Read(buf)
 
 				if stopFirstRow {
+					if encErr != nil {
+						return Object{}, encErr
+					}
 					return Object{}, io.EOF
 				}
 
@@ -310,16 +337,25 @@ func GetDataObj(db *Database, prefix byte, key []byte, val []byte, stopAfterFirs
 				if (regTypeVal == 0 && bytes.Equal(val, data[1])) || regTypeVal == 1 || regTypeVal == 2 ||
 				(regTypeVal == 3 && reVal.Match(data[1])) {
 					db.File.Seek(pos + int64(db.BitSize), io.SeekStart)
-
-					return Object{
+					
+					obj := Object{
 						Key: data[0],
 						Val: data[1],
 						Line: pos / int64(db.BitSize),
-					}, nil
+					}
+
+					if encErr != nil {
+						return obj, encErr
+					}
+
+					return obj, nil
 				}
 			}
 
 			if stopFirstRow {
+				if encErr != nil {
+					return Object{}, encErr
+				}
 				return Object{}, io.EOF
 			}
 
@@ -333,7 +369,9 @@ func GetDataObj(db *Database, prefix byte, key []byte, val []byte, stopAfterFirs
 		_, err = db.File.Read(buf)
 	}
 
-	if err != nil {
+	if encErr != nil {
+		return Object{}, encErr
+	}else if err != nil {
 		return Object{}, err
 	}
 
@@ -444,6 +482,11 @@ func SetDataObj(db *Database, prefix byte, key []byte, val []byte) (Object, erro
 	}
 
 	val = regex.JoinBytes(key, '=', val)
+
+	val, err = encData(db, val)
+	if err != nil {
+		return Object{}, err
+	}
 
 	// set data
 	off := 1
@@ -676,4 +719,58 @@ func SetDataObj(db *Database, prefix byte, key []byte, val []byte) (Object, erro
 	}
 
 	return obj, nil
+}
+
+
+func encData(db *Database, buf []byte) ([]byte, error) {
+	var err error
+	
+	if db.encKey != nil {
+		buf, err = crypt.CFB.Encrypt(buf, db.encKey)
+		if err != nil {
+			return nil, err
+		}
+	}else if !DebugMode {
+		buf = smaz.Compress(buf)
+	}
+
+	re, err := regex.CompTry(`[%=,@\-!\n%1]`, string(db.PrefixList))
+	if err != nil {
+		return nil, err
+	}
+
+	charList := append([]byte("%=,@-!\n"), db.PrefixList...)
+	buf = re.RepFunc(buf, func(data func(int) []byte) []byte {
+		if i := bytes.IndexRune(charList, rune(data(0)[0])); i != -1 {
+			return []byte{'%', strconv.Itoa(i)[0], '%'}
+		}
+		return []byte{}
+	})
+
+	return buf, nil
+}
+
+func decData(db *Database, buf []byte) ([]byte, error) {
+	var err error
+	if db.encKey != nil {
+		buf, err = crypt.CFB.Decrypt(buf, db.encKey)
+		if err != nil {
+			return nil, err
+		}
+	}else if !DebugMode {
+		buf, err = smaz.Decompress(buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	charList := append([]byte("%=,@-!\n"), db.PrefixList...)
+	buf = regex.Comp(`%([0-9]+)%`).RepFunc(buf, func(data func(int) []byte) []byte {
+		if i, err := strconv.Atoi(string(data(1))); err == nil {
+			return []byte{charList[i]}
+		}
+		return []byte{}
+	})
+
+	return buf, nil
 }

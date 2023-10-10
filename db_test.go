@@ -9,7 +9,7 @@ import (
 func Test(t *testing.T){
 	DebugMode = true
 
-	db, err := Open("test/test.db", 16)
+	db, err := Open("test/test.db", []byte("key123"), 16)
 	if err != nil {
 		panic(err)
 	}
@@ -26,15 +26,13 @@ func Test(t *testing.T){
 	table.GetRow("Row1")
 	table2.Del()
 
-	// db.DelTable("MyTable2")
-
 	db.Optimize()
 }
 
 func TestCore(t *testing.T){
 	DebugMode = true
 
-	db, err := Open("test/core.db", 16)
+	db, err := Open("test/core.db", nil, 16)
 	if err != nil {
 		panic(err)
 	}
@@ -52,4 +50,7 @@ func TestCore(t *testing.T){
 	setDataObj(db, '$', []byte("MyTable"), []byte("MyVal"))
 	// setDataObj(db, '$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger"))
 	// setDataObj(db, '$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger_MoreTextToMakeThisLonger"))
+
+	addDataObj(db, '$', []byte("Test"), []byte("Value?!$"))
+	getDataObj(db, '$', []byte("Test"), []byte("Value?!$"))
 }
