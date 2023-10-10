@@ -1,4 +1,4 @@
-module db
+module github.com/AspieSoft/db
 
 go 1.20
 
