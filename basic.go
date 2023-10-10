@@ -52,6 +52,8 @@ func (db *Database) Optimize() (error) {
 
 	tableList, err := db.FindTables([]byte{0}, true)
 	if err != nil {
+		file.Close()
+		os.Remove(db.path+".opt")
 		return nil
 	}
 

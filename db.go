@@ -740,23 +740,52 @@ func encData(db *Database, buf []byte) ([]byte, error) {
 		buf = smaz.Compress(buf)
 	}
 
-	re, err := regex.CompTry(`[%=,@\-!\n%1]`, string(db.prefixList))
-	if err != nil {
-		return nil, err
-	}
-
-	charList := append([]byte("%=,@-!\n"), db.prefixList...)
-	buf = re.RepFunc(buf, func(data func(int) []byte) []byte {
-		if i := bytes.IndexRune(charList, rune(data(0)[0])); i != -1 {
-			return []byte{'%', strconv.Itoa(i)[0], '%'}
+	// for some reason, using regex lead to inconsistent results and caused issues with decoding
+	res := []byte{}
+	charList := append([]byte("%@-!\n"), db.prefixList...)
+	for i := 0; i < len(buf); i++ {
+		if ind := bytes.IndexRune(charList, rune(buf[i])); ind != -1 {
+			res = append(res, buf[:i]...)
+			res = append(res, '%')
+			res = append(res, []byte(strconv.Itoa(ind))...)
+			res = append(res, '%')
+			buf = buf[i+1:]
+			i = -1
 		}
-		return []byte{}
-	})
+	}
+	buf = append(res, buf...)
+	res = nil
 
 	return buf, nil
 }
 
 func decData(db *Database, buf []byte) ([]byte, error) {
+	
+	// for some reason, using regex lead to inconsistent results and caused issues with decoding
+	res := []byte{}
+	charList := append([]byte("%@-!\n"), db.prefixList...)
+	var b []byte
+	for i := 0; i < len(buf); i++ {
+		if buf[i] == '%' {
+			if b == nil {
+				res = append(res, buf[:i]...)
+				b = []byte{}
+			}else{
+				buf = buf[i+1:]
+				i = -1
+
+				if n, err := strconv.Atoi(string(b)); err == nil && n < len(charList) {
+					res = append(res, charList[n])
+				}
+				b = nil
+			}
+		}else if b != nil {
+			b = append(b, buf[i])
+		}
+	}
+	buf = append(res, buf...)
+	res = nil
+
 	var err error
 	if db.encKey != nil {
 		buf, err = crypt.CFB.Decrypt(buf, db.encKey)
@@ -769,14 +798,6 @@ func decData(db *Database, buf []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-
-	charList := append([]byte("%=,@-!\n"), db.prefixList...)
-	buf = regex.Comp(`%([0-9]+)%`).RepFunc(buf, func(data func(int) []byte) []byte {
-		if i, err := strconv.Atoi(string(data(1))); err == nil {
-			return []byte{charList[i]}
-		}
-		return []byte{}
-	})
 
 	return buf, nil
 }

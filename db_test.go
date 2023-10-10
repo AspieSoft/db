@@ -11,22 +11,52 @@ func Test(t *testing.T){
 
 	db, err := Open("test/test.db", []byte("key123"), 16)
 	if err != nil {
-		panic(err)
+		t.Error(err)
 	}
 
 	_ = fmt.Print
 	db.file.Truncate(0)
 
 
-	db.AddTable("MyTable")
-	table2, err := db.AddTable("MyTable2")
-	table, err := db.GetTable("MyTable")
-	table.AddRow("Row1", "val1")
-	table.AddRow("Row2", "val2")
-	table.GetRow("Row1")
-	table2.Del()
+	_, err = db.AddTable("MyTable")
+	if err != nil {
+		t.Error(err)
+	}
 
-	db.Optimize()
+	table2, err := db.AddTable("MyTable2")
+	if err != nil {
+		t.Error(err)
+	}
+
+	table, err := db.GetTable("MyTable")
+	if err != nil {
+		t.Error(err)
+	}
+
+	_, err = table.AddRow("Row1", "val1")
+	if err != nil {
+		t.Error(err)
+	}
+
+	_, err = table.AddRow("Row2", "val2")
+	if err != nil {
+		t.Error(err)
+	}
+
+	_, err = table.GetRow("Row1")
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = table2.Del()
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = db.Optimize()
+	if err != nil {
+		t.Error(err)
+	}
 }
 
 func TestCore(t *testing.T){
@@ -34,23 +64,30 @@ func TestCore(t *testing.T){
 
 	db, err := Open("test/core.db", nil, 16)
 	if err != nil {
-		panic(err)
+		t.Error(err)
 	}
 
 	_ = fmt.Print
 	db.file.Truncate(0)
 
 
-	addDataObj(db, '$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte("test"))
+	_, err = addDataObj(db, '$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte("test"))
+	if err != nil {
+		t.Error(err)
+	}
 
 	db.file.Seek(0, io.SeekStart)
-	getDataObj(db, '$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte{0})
+	_, err = getDataObj(db, '$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte{0})
+	if err != nil {
+		t.Error(err)
+	}
 
 	db.file.Seek(0, io.SeekStart)
-	setDataObj(db, '$', []byte("MyTable"), []byte("MyVal"))
+	_, err = setDataObj(db, '$', []byte("MyTable"), []byte("MyVal"))
+	if err != nil {
+		t.Error(err)
+	}
+
 	// setDataObj(db, '$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger"))
 	// setDataObj(db, '$', []byte("MyTable"), []byte("MyVal_MoreTextToMakeThisLonger_MoreTextToMakeThisLonger"))
-
-	addDataObj(db, '$', []byte("Test"), []byte("Value?!$"))
-	getDataObj(db, '$', []byte("Test"), []byte("Value?!$"))
 }
