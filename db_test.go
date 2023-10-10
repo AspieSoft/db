@@ -16,6 +16,7 @@ func Test(t *testing.T){
 
 	_ = fmt.Print
 	db.file.Truncate(0)
+	db.file.Sync()
 
 
 	_, err = db.AddTable("MyTable")
@@ -69,6 +70,7 @@ func TestCore(t *testing.T){
 
 	_ = fmt.Print
 	db.file.Truncate(0)
+	db.file.Sync()
 
 
 	_, err = addDataObj(db, '$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte("test"))

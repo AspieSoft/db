@@ -2,10 +2,12 @@ package db
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/AspieSoft/go-regex-re2/v2"
@@ -41,12 +43,23 @@ type dbObj struct {
 // Open opens an existing database or creates a new one
 //
 // @bitSize tells the database what bit size to use (this value must always be consistant)
-// (default: 1024)
+//  - (default: 1024)
+//  - (0 = default 1024)
+//  - (min = 64)
+//  - (max = 64000)
+// note: in debug mode, (min = 16)
 func Open(path string, encKey []byte, bitSize ...uint16) (*Database, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return &Database{}, err
 	}
+
+	path = string(regex.Comp(`[\\/]+$`).RepStr([]byte(path), []byte{}))
+	if !strings.HasSuffix(path, ".db") {
+		path += ".db"
+	}
+
+	os.MkdirAll(string(regex.Comp(`[\\/][^\\/]+$`).RepStr([]byte(path), []byte{})), 0755)
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0755)
 	if err != nil {
@@ -68,14 +81,24 @@ func Open(path string, encKey []byte, bitSize ...uint16) (*Database, error) {
 		bSize = 64000
 	}
 
-	return &Database{
+	db := &Database{
 		file: file,
 		path: path,
 		bitSize: bSize,
 		prefixList: []byte("$:"),
 		cache: haxmap.New[string, *Table](),
 		encKey: encKey,
-	}, nil
+	}
+
+	file.Seek(0, io.SeekStart)
+	encData, err := getDataObj(db, '#', []byte("enc"), []byte{0})
+	if err != nil {
+		addDataObj(db, '#', []byte("enc"), []byte("enc"))
+	}else if !bytes.Equal(encData.val, []byte("enc")) {
+		return &Database{}, errors.New("failed to decrypt database")
+	}
+
+	return db, nil
 }
 
 // Close closes the database file
@@ -742,7 +765,7 @@ func encData(db *Database, buf []byte) ([]byte, error) {
 
 	// for some reason, using regex lead to inconsistent results and caused issues with decoding
 	res := []byte{}
-	charList := append([]byte("%@-!\n"), db.prefixList...)
+	charList := append([]byte("%@-!\n#"), db.prefixList...)
 	for i := 0; i < len(buf); i++ {
 		if ind := bytes.IndexRune(charList, rune(buf[i])); ind != -1 {
 			res = append(res, buf[:i]...)
@@ -760,10 +783,9 @@ func encData(db *Database, buf []byte) ([]byte, error) {
 }
 
 func decData(db *Database, buf []byte) ([]byte, error) {
-	
 	// for some reason, using regex lead to inconsistent results and caused issues with decoding
 	res := []byte{}
-	charList := append([]byte("%@-!\n"), db.prefixList...)
+	charList := append([]byte("%@-!\n#"), db.prefixList...)
 	var b []byte
 	for i := 0; i < len(buf); i++ {
 		if buf[i] == '%' {
