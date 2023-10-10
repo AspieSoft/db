@@ -16,8 +16,9 @@ import (
 	"github.com/cespare/go-smaz"
 )
 
-const DebugMode = true
+var DebugMode = false
 
+const coreChars = "%=,@#!-\n"
 const maxDatabaseSize uint64 = 99999999999999 // 14 (64000 bit - max lines = 1 billion)
 
 type Database struct {
@@ -51,7 +52,7 @@ type Object struct {
 // @prefixList tells the database what additional characters to preserve for the database object prefixes
 func Open(path string, encKey []byte, bitSize uint16, prefixList []byte) (*Database, error) {
 	for _, prefix := range prefixList {
-		if (prefix >= '0' && prefix <= '9') || goutil.Contains([]byte("%=,@-!\n#"), prefix) {
+		if (prefix >= '0' && prefix <= '9') || goutil.Contains([]byte(coreChars), prefix) {
 			return &Database{}, errors.New("'"+string(prefix)+"' is reserved for the core database structure")
 		}
 	}
@@ -760,7 +761,7 @@ func encData(db *Database, buf []byte) ([]byte, error) {
 
 	// for some reason, using regex lead to inconsistent results and caused issues with decoding
 	res := []byte{}
-	charList := append([]byte("%@-!\n#"), db.PrefixList...)
+	charList := append([]byte(coreChars), db.PrefixList...)
 	for i := 0; i < len(buf); i++ {
 		if ind := bytes.IndexRune(charList, rune(buf[i])); ind != -1 {
 			res = append(res, buf[:i]...)
@@ -780,7 +781,7 @@ func encData(db *Database, buf []byte) ([]byte, error) {
 func decData(db *Database, buf []byte) ([]byte, error) {
 	// for some reason, using regex lead to inconsistent results and caused issues with decoding
 	res := []byte{}
-	charList := append([]byte("%@-!\n#"), db.PrefixList...)
+	charList := append([]byte(coreChars), db.PrefixList...)
 	var b []byte
 	for i := 0; i < len(buf); i++ {
 		if buf[i] == '%' {

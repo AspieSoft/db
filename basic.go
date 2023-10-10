@@ -123,7 +123,7 @@ func (db *Database) AddData(key string, value string, noLock ...bool) (*Data, er
 
 	// ensure data does not already exist
 	db.file.Seek(0, io.SeekStart)
-	if data, err := getDataObj(db, '#', keyB, []byte{0}); err == nil {
+	if data, err := getDataObj(db, '~', keyB, []byte{0}); err == nil {
 		return &Data{
 			db: db,
 			Key: string(data.key),
@@ -132,7 +132,7 @@ func (db *Database) AddData(key string, value string, noLock ...bool) (*Data, er
 		}, errors.New("data key already exists")
 	}
 
-	data, err := addDataObj(db, '#', keyB, []byte{})
+	data, err := addDataObj(db, '~', keyB, []byte{})
 	if err != nil {
 		return &Data{db: db}, err
 	}
@@ -164,7 +164,7 @@ func (db *Database) GetData(key string, noLock ...bool) (*Data, error) {
 	//todo: get table from cache
 
 	db.file.Seek(0, io.SeekStart)
-	data, err := getDataObj(db, '#', keyB, []byte{0})
+	data, err := getDataObj(db, '~', keyB, []byte{0})
 	if err != nil {
 		return &Data{db: db}, err
 	}
@@ -201,7 +201,7 @@ func (db *Database) FindData(key []byte, value []byte, noLock ...bool) ([]*Data,
 
 	db.file.Seek(0, io.SeekStart)
 	for {
-		data, err := getDataObj(db, '#', key, value)
+		data, err := getDataObj(db, '~', key, value)
 		if err != nil {
 			break
 		}
@@ -233,7 +233,7 @@ func (data *Data) Del(noLock ...bool) error {
 	}
 	
 	data.db.file.Seek(data.line * int64(data.db.bitSize), io.SeekStart)
-	_, err := delDataObj(data.db, '#')
+	_, err := delDataObj(data.db, '~')
 
 	data.line = -1
 
@@ -258,7 +258,7 @@ func (data *Data) SetValue(value string, noLock ...bool) error {
 	})
 
 	data.db.file.Seek(data.line * int64(data.db.bitSize), io.SeekStart)
-	dt, err := setDataObj(data.db, '#', keyB, valB)
+	dt, err := setDataObj(data.db, '~', keyB, valB)
 	if err != nil {
 		return err
 	}
