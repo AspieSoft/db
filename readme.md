@@ -1,5 +1,7 @@
 # DataBase
 
+[![donation link](https://img.shields.io/badge/buy%20me%20a%20coffee-paypal-blue)](https://paypal.me/shaynejrtaylor?country.x=US&locale.x=en_US)
+
 A simple database that anyone can build off of.
 
 ## Notice: This Module Is Currently In Beta
