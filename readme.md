@@ -2,6 +2,8 @@
 
 A simple database that anyone can build off of.
 
+## Notice: This Module Is Currently In Beta
+
 > Note: If you have any name suggestions, please share.
 
 ## Installation
