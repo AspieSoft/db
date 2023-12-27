@@ -6,7 +6,7 @@ A simple database that anyone can build off of.
 
 ## Notice: This Module Is Currently In Beta!
 
-### Notice: For Any Version 0.0 And Below, DataBase Files May Not Be Compatible With Newer Versions!
+### Notice: For Any Version In Beta 0.0.x, DataBase Files May Not Be Compatible With Newer Versions!
 
 > Note: If you have any name suggestions, please share.
 
