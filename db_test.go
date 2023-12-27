@@ -9,6 +9,7 @@ import (
 
 func Test(t *testing.T){
 	DebugMode = true
+	_ = fmt.Println
 
 	os.Remove("test/test.db")
 
@@ -59,20 +60,15 @@ func Test(t *testing.T){
 }
 
 func TestCore(t *testing.T){
-	//temp
-	return
-
 	DebugMode = true
+	_ = fmt.Println
+
+	os.Remove("test/core.db")
 
 	db, err := Open("test/core.db", nil, 16)
 	if err != nil {
 		t.Error(err)
 	}
-
-	_ = fmt.Print
-	db.file.Truncate(0)
-	db.file.Sync()
-
 
 	_, err = addDataObj(db, '$', []byte("MyTable_MoreTextToMakeThisLonger"), []byte("test"))
 	if err != nil {

@@ -74,6 +74,11 @@ func Open(path string, encKey []byte, bitSize uint16, prefixList []byte) (*Datab
 		return &Database{}, err
 	}
 
+	newFile := false
+	if _, err = file.ReadAt(make([]byte, 1), 0); err == io.EOF {
+		newFile = true
+	}
+
 	if bitSize == 0 {
 		bitSize = 128
 	}else if DebugMode && bitSize < 16 {
@@ -87,17 +92,46 @@ func Open(path string, encKey []byte, bitSize uint16, prefixList []byte) (*Datab
 	db := &Database{
 		File: file,
 		Path: path,
-		BitSize: bitSize,
+		BitSize: 10,
 		PrefixList: prefixList,
 		encKey: encKey,
 	}
 
-	file.Seek(0, io.SeekStart)
-	encData, err := GetDataObj(db, '#', []byte("enc"), []byte{0})
-	if err != nil {
+	if newFile {
+		db.BitSize = bitSize
+		s := strconv.FormatUint(uint64(bitSize), 36)
+		sp := int(bitSize - 5) - len(s)
+		if DebugMode {
+			sp--
+		}
+		if sp < 0 || len(s) > 5 {
+			return &Database{}, errors.New("bit size too large") // user specified bit for a new database
+		}
+
+		file.WriteAt([]byte("#bit="+s+strings.Repeat("-", sp)), 0)
+		if DebugMode {
+			file.WriteAt([]byte{'\n'}, int64(bitSize-1))
+		}
+
 		AddDataObj(db, '#', []byte("enc"), []byte("enc"))
-	}else if !bytes.Equal(encData.Val, []byte("enc")) {
-		return &Database{}, errors.New("failed to decrypt database")
+	}else{
+		buf := make([]byte, 10)
+		_, err = file.ReadAt(buf, 0)
+		if err != nil || !bytes.HasPrefix(buf, []byte("#bit=")) {
+			return &Database{}, errors.New("defined bit size too large") // current bit size defined by the database file
+		}
+
+		if i, err := strconv.ParseUint(string(bytes.TrimRight(buf[5:], "-")), 36, 16); err == nil && i != 0 {
+			bitSize = uint16(i)
+		}else{
+			return &Database{}, errors.New("defined bit size is NaN:36 (not a base36 number)") // current bit size defined by the database file
+		}
+		db.BitSize = bitSize
+
+		file.Seek(int64(bitSize), io.SeekStart)
+		if encData, err := GetDataObj(db, '#', []byte("enc"), []byte{0}); err != nil || !bytes.Equal(encData.Val, []byte("enc")) {
+			return &Database{}, errors.New("failed to decrypt database")
+		}
 	}
 
 	return db, nil

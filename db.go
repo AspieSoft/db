@@ -90,7 +90,7 @@ func Open(path string, encKey []byte, bitSize ...uint16) (*Database, error) {
 	db := &Database{
 		file: file,
 		path: path,
-		bitSize: 5,
+		bitSize: 10,
 		prefixList: []byte("$:~"),
 		cache: haxmap.New[string, *Table](),
 		encKey: encKey,
@@ -120,7 +120,7 @@ func Open(path string, encKey []byte, bitSize ...uint16) (*Database, error) {
 			return &Database{}, errors.New("defined bit size too large") // current bit size defined by the database file
 		}
 
-		if i, err := strconv.ParseUint(string(bytes.TrimRight(buf[5:], "-")), 36, 16); err == nil {
+		if i, err := strconv.ParseUint(string(bytes.TrimRight(buf[5:], "-")), 36, 16); err == nil && i != 0 {
 			bSize = uint16(i)
 		}else{
 			return &Database{}, errors.New("defined bit size is NaN:36 (not a base36 number)") // current bit size defined by the database file
