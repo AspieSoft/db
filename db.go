@@ -43,9 +43,9 @@ type dbObj struct {
 
 // Open opens an existing database or creates a new one
 //
-// @bitSize tells the database what bit size to use (this value must always be consistant)
-//  - (default: 1024)
-//  - (0 = default 1024)
+// @bitSize tells the database what bit size to use (this value must always be consistent)
+//  - (default: 128)
+//  - (0 = default 128)
 //  - (min = 64)
 //  - (max = 64000)
 // note: in debug mode, (min = 16)
@@ -66,14 +66,19 @@ func Open(path string, encKey []byte, bitSize ...uint16) (*Database, error) {
 	if err != nil {
 		return &Database{}, err
 	}
-	
+
+	newFile := false
+	if _, err = file.ReadAt(make([]byte, 1), 0); err == io.EOF {
+		newFile = true
+	}
+
 	bSize := uint16(0)
 	if len(bitSize) != 0 {
 		bSize = bitSize[0]
 	}
 
 	if bSize == 0 {
-		bSize = 1024
+		bSize = 128
 	}else if DebugMode && bSize < 16 {
 		bSize = 16
 	}else if !DebugMode && bSize < 64 {
@@ -85,18 +90,47 @@ func Open(path string, encKey []byte, bitSize ...uint16) (*Database, error) {
 	db := &Database{
 		file: file,
 		path: path,
-		bitSize: bSize,
+		bitSize: 5,
 		prefixList: []byte("$:~"),
 		cache: haxmap.New[string, *Table](),
 		encKey: encKey,
 	}
 
-	file.Seek(0, io.SeekStart)
-	encData, err := getDataObj(db, '#', []byte("enc"), []byte{0})
-	if err != nil {
+	if newFile {
+		db.bitSize = bSize
+		s := strconv.FormatUint(uint64(bSize), 36)
+		sp := int(bSize - 5) - len(s)
+		if DebugMode {
+			sp--
+		}
+		if sp < 0 || len(s) > 5 {
+			return &Database{}, errors.New("bit size too large") // user specified bit for a new database
+		}
+
+		file.WriteAt([]byte("#bit="+s+strings.Repeat("-", sp)), 0)
+		if DebugMode {
+			file.WriteAt([]byte{'\n'}, int64(bSize-1))
+		}
+
 		addDataObj(db, '#', []byte("enc"), []byte("enc"))
-	}else if !bytes.Equal(encData.val, []byte("enc")) {
-		return &Database{}, errors.New("failed to decrypt database")
+	}else{
+		buf := make([]byte, 10)
+		_, err = file.ReadAt(buf, 0)
+		if err != nil || !bytes.HasPrefix(buf, []byte("#bit=")) {
+			return &Database{}, errors.New("defined bit size too large") // current bit size defined by the database file
+		}
+
+		if i, err := strconv.ParseUint(string(bytes.TrimRight(buf[5:], "-")), 36, 16); err == nil {
+			bSize = uint16(i)
+		}else{
+			return &Database{}, errors.New("defined bit size is NaN:36 (not a base36 number)") // current bit size defined by the database file
+		}
+		db.bitSize = bSize
+
+		file.Seek(int64(bSize), io.SeekStart)
+		if encData, err := getDataObj(db, '#', []byte("enc"), []byte{0}); err != nil || !bytes.Equal(encData.val, []byte("enc")) {
+			return &Database{}, errors.New("failed to decrypt database")
+		}
 	}
 
 	return db, nil
@@ -334,6 +368,7 @@ func getDataObj(db *Database, prefix byte, key []byte, val []byte, stopAfterFirs
 					return dbObj{}, encErr
 				}
 
+				//todo: fix loop continuing if encryption fails
 				continue
 			}
 
@@ -745,9 +780,9 @@ func setDataObj(db *Database, prefix byte, key []byte, val []byte) (dbObj, error
 
 func encData(db *Database, buf []byte) ([]byte, error) {
 	var err error
-	
+
 	if db.encKey != nil {
-		buf, err = crypt.CFB.Encrypt(buf, db.encKey)
+		buf, err = crypt.CFB.Encrypt(append(buf, []byte("#enc")...), db.encKey)
 		if err != nil {
 			return nil, err
 		}
@@ -805,7 +840,10 @@ func decData(db *Database, buf []byte) ([]byte, error) {
 		buf, err = crypt.CFB.Decrypt(buf, db.encKey)
 		if err != nil {
 			return nil, err
+		}else if !bytes.HasSuffix(buf, []byte("#enc")) {
+			return nil, errors.New("failed to decrypt")
 		}
+		buf = buf[:len(buf)-4]
 	}else if !DebugMode {
 		buf, err = smaz.Decompress(buf)
 		if err != nil {

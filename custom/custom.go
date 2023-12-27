@@ -42,9 +42,9 @@ type Object struct {
 
 // Open opens an existing database or creates a new one
 //
-// @bitSize tells the database what bit size to use (this value must always be consistant)
-//  - (default: 1024)
-//  - (0 = default 1024)
+// @bitSize tells the database what bit size to use (this value must always be consistent)
+//  - (default: 128)
+//  - (0 = default 128)
 //  - (min = 64)
 //  - (max = 64000)
 // note: in debug mode, (min = 16)
@@ -75,7 +75,7 @@ func Open(path string, encKey []byte, bitSize uint16, prefixList []byte) (*Datab
 	}
 
 	if bitSize == 0 {
-		bitSize = 1024
+		bitSize = 128
 	}else if DebugMode && bitSize < 16 {
 		bitSize = 16
 	}else if !DebugMode && bitSize < 64 {

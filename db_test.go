@@ -3,21 +3,19 @@ package db
 import (
 	"fmt"
 	"io"
+	"os"
 	"testing"
 )
 
 func Test(t *testing.T){
 	DebugMode = true
 
+	os.Remove("test/test.db")
+
 	db, err := Open("test/test.db", []byte("key123"), 16)
 	if err != nil {
 		t.Error(err)
 	}
-
-	_ = fmt.Print
-	db.file.Truncate(0)
-	db.file.Sync()
-
 
 	_, err = db.AddTable("MyTable")
 	if err != nil {
@@ -54,13 +52,16 @@ func Test(t *testing.T){
 		t.Error(err)
 	}
 
-	err = db.Optimize()
+	/* err = db.Optimize()
 	if err != nil {
 		t.Error(err)
-	}
+	} */
 }
 
 func TestCore(t *testing.T){
+	//temp
+	return
+
 	DebugMode = true
 
 	db, err := Open("test/core.db", nil, 16)

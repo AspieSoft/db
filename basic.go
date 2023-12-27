@@ -39,7 +39,9 @@ type Data struct {
 // and will move existing tables to the top of the database file for quicker access
 //
 // row indexes are referenced from the tables, so having tables at the top is best for performance
-func (db *Database) Optimize() (error) {
+func (db *Database) Optimize() error {
+	return errors.New("Database optimization is temporary unavailable! This method is not yet compatible with the current algorithm!")
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -59,6 +61,8 @@ func (db *Database) Optimize() (error) {
 		encKey: db.encKey,
 		cache: db.cache,
 	}
+
+	//todo: fix database to include default #data (#bit, #enc, etc.)
 
 	if dataList, err := db.FindData([]byte{0}, []byte{0}, true); err == nil {
 		for _, data := range dataList {
